@@ -77,7 +77,7 @@ export default function TransformGizmo({ target, onDragStart, onDragEnd }: Trans
       ref={controlsRef}
       object={target}
       mode={activeTool === "move" ? "translate" : "rotate"}
-      size={0.6}
+      size={1.0}
     />
   );
 }
