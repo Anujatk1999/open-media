@@ -147,11 +147,19 @@ function Workspace({
   // Track Object3D roots keyed by mannequin id so we can frame selected.
   const rootsRef = useRef<Map<string, THREE.Object3D>>(new Map());
 
+  // Track the currently selected root so framing callbacks don't capture stale closures.
+  const selectedRootRef = useRef<THREE.Object3D | null>(null);
+
   const target = useMemo(() => {
     if (selectedId) {
       return rootsRef.current.get(selectedId) ?? null;
     }
     return null;
+  }, [selectedId, mannequins]);
+
+  // Keep selectedRootRef in sync with selection changes.
+  useEffect(() => {
+    selectedRootRef.current = selectedId ? rootsRef.current.get(selectedId) ?? null : null;
   }, [selectedId, mannequins]);
 
   useLayoutEffect(() => {
@@ -161,12 +169,12 @@ function Workspace({
 
     ready({
       view: (v) => {
-        const firstRoot = rootsRef.current.values().next().value ?? null;
-        if (firstRoot) setEditorView(c, ctl, firstRoot, v);
+        const r = selectedRootRef.current;
+        if (r) setEditorView(c, ctl, r, v);
       },
       frame: () => {
-        const firstRoot = rootsRef.current.values().next().value ?? null;
-        if (firstRoot) frameObject(c, ctl, firstRoot);
+        const r = selectedRootRef.current;
+        if (r) frameObject(c, ctl, r);
       },
       reset: () => {
         ctl.target.set(0, 1, 0);
@@ -187,8 +195,8 @@ function Workspace({
         ctl.update();
       },
       fitAll: () => {
-        const firstRoot = rootsRef.current.values().next().value ?? null;
-        if (firstRoot) frameObject(c, ctl, firstRoot);
+        const r = selectedRootRef.current;
+        if (r) frameObject(c, ctl, r);
       },
       resetView: () => {
         ctl.target.set(0, 1, 0);

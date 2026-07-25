@@ -28,35 +28,46 @@ export default function TransformGizmo({ target, onDragStart, onDragEnd }: Trans
     controlsRef.current.setMode(activeTool === "move" ? "translate" : "rotate");
   }, [activeTool]);
 
-  // Disable orbit controls while dragging
+  // Track drag state explicitly — don't rely on controls.enabled timing.
+  const isDraggingRef = useRef(false);
+  const pendingUpdate = useRef<{ position: [number, number, number]; rotation: [number, number, number] } | null>(null);
+
   useEffect(() => {
     const ctrl = controlsRef.current;
     if (!ctrl) return;
 
     const onStart = () => {
+      isDraggingRef.current = true;
+      pendingUpdate.current = null;
       (ctrl as any).enabled = false;
-      // Also disable OrbitControls
       const orbit = (camera as any)?.__orbitControls;
       if (orbit) orbit.enabled = false;
       onDragStart?.();
     };
 
     const onStop = () => {
+      isDraggingRef.current = false;
+      if (pendingUpdate.current && selectedId) {
+        updateTransform(selectedId, pendingUpdate.current);
+        pendingUpdate.current = null;
+      }
       (ctrl as any).enabled = true;
       const orbit = (camera as any)?.__orbitControls;
       if (orbit) orbit.enabled = true;
       onDragEnd?.();
     };
 
+    // Accumulate live changes for Inspector feedback during drag.
     const onChange = () => {
       if (!target || !selectedId) return;
-      // Re-read transform from the group so we don't accumulate floating-point drift
       const pos = target.position;
       const rot = target.rotation;
-      updateTransform(selectedId, {
-        position: [parseFloat(pos.x.toFixed(4)), parseFloat(pos.y.toFixed(4)), parseFloat(pos.z.toFixed(4))],
-        rotation: [parseFloat(rot.x.toFixed(4)), parseFloat(rot.y.toFixed(4)), parseFloat(rot.z.toFixed(4))],
-      });
+      const snapshot = {
+        position: [pos.x, pos.y, pos.z] as [number, number, number],
+        rotation: [rot.x, rot.y, rot.z] as [number, number, number],
+      };
+      pendingUpdate.current = snapshot;
+      updateTransform(selectedId, snapshot);
     };
 
     (ctrl as any).addEventListener("mouseDown", onStart);
@@ -70,6 +81,18 @@ export default function TransformGizmo({ target, onDragStart, onDragEnd }: Trans
     };
   }, [target, selectedId, updateTransform, camera, onDragStart, onDragEnd]);
 
+  // When store changes from Inspector, re-attach TransformControls so it
+  // picks up the new position. Only re-attach when NOT dragging.
+  useEffect(() => {
+    if (isDraggingRef.current) return;
+    const ctrl = controlsRef.current;
+    if (!ctrl || !target || selected?.locked) return;
+    if ((ctrl as any).object === target) {
+      ctrl.detach();
+      ctrl.attach(target);
+    }
+  }, [selected?.transform.position, selected?.transform.rotation, target]);
+
   if (!target || isLocked) return null;
 
   return (
@@ -77,6 +100,7 @@ export default function TransformGizmo({ target, onDragStart, onDragEnd }: Trans
       ref={controlsRef}
       object={target}
       mode={activeTool === "move" ? "translate" : "rotate"}
+      space="world"
       size={1.0}
     />
   );
