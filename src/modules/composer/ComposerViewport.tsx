@@ -15,6 +15,10 @@ type WorkspaceApi = {
   view: (v: EditorView) => void;
   frame: () => void;
   reset: () => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  fitAll: () => void;
+  resetView: () => void;
 };
 
 export interface ComposerViewportAPI {
@@ -28,6 +32,7 @@ export const ComposerViewport = forwardRef<ComposerViewportAPI>(function Compose
   const [api, setApi] = useState<WorkspaceApi | null>(null);
   const [grid, setGrid] = useState(true);
   const [axes, setAxes] = useState(false);
+  const [zoomPercent, setZoomPercent] = useState(100);
 
   useImperativeHandle(ref, () => ({
     setJoint(...args: Parameters<ComposerViewportAPI['setJoint']>) {
@@ -45,10 +50,17 @@ export const ComposerViewport = forwardRef<ComposerViewportAPI>(function Compose
         dpr={[1, 2]}
         camera={{ fov: 42, near: 0.1, far: 1000, position: [6, 4, 8] }}
       >
-        <WorkspaceWithAPI grid={grid} axes={axes} ready={setApi} />
+        <WorkspaceWithAPI grid={grid} axes={axes} ready={setApi} onZoomChange={setZoomPercent} />
       </Canvas>
       <div className="workspace-toolbar">
         <WorkspaceToolbar />
+        <i/>
+        <span>Zoom <b>{zoomPercent}%</b></span>
+        <button onClick={() => api?.zoomIn()} title="Zoom In">+</button>
+        <button onClick={() => api?.zoomOut()} title="Zoom Out">-</button>
+        <i/>
+        <button onClick={() => api?.fitAll()}>Fit All</button>
+        <button onClick={() => api?.resetView()}>Reset View</button>
         <i/>
         <span>Orbit <b>Left drag</b></span>
         <span>Pan <b>Right drag</b></span>
@@ -59,7 +71,6 @@ export const ComposerViewport = forwardRef<ComposerViewportAPI>(function Compose
         <button onClick={() => api?.view('top')}>Top</button>
         <button onClick={() => api?.view('perspective')}>Perspective</button>
         <button onClick={() => api?.frame()}>Frame Selected</button>
-        <button onClick={() => api?.reset()}>Reset View</button>
         <button className={grid ? 'on' : ''} onClick={() => setGrid(v => !v)}>Grid</button>
         <button className={axes ? 'on' : ''} onClick={() => setAxes(v => !v)}>Axes</button>
       </div>
@@ -67,7 +78,7 @@ export const ComposerViewport = forwardRef<ComposerViewportAPI>(function Compose
   );
 });
 
-function WorkspaceWithAPI(props: { grid: boolean; axes: boolean; ready: (api: WorkspaceApi) => void }) {
+function WorkspaceWithAPI(props: { grid: boolean; axes: boolean; ready: (api: WorkspaceApi) => void; onZoomChange?: (pct: number) => void }) {
   const updatePosture = useComposerStore(s => s.updateMannequinPosture);
   const localMannequinRefs = useRef<Map<string, MannequinHandle>>(new Map());
 
@@ -110,7 +121,7 @@ function WorkspaceWithAPI(props: { grid: boolean; axes: boolean; ready: (api: Wo
 
   workspaceAPIRef.current = api;
 
-  return <Workspace grid={props.grid} axes={props.axes} ready={props.ready} mannequinRefs={localMannequinRefs} />;
+  return <Workspace grid={props.grid} axes={props.axes} ready={props.ready} mannequinRefs={localMannequinRefs} onZoomChange={props.onZoomChange} />;
 }
 
 function Workspace({
@@ -118,11 +129,13 @@ function Workspace({
   axes,
   ready,
   mannequinRefs,
+  onZoomChange,
 }: {
   grid: boolean;
   axes: boolean;
   ready: (api: WorkspaceApi) => void;
   mannequinRefs: React.MutableRefObject<Map<string, MannequinHandle>>;
+  onZoomChange?: (pct: number) => void;
 }) {
   const { camera } = useThree();
   const controls = useRef<OrbitControlsType>(null);
@@ -161,8 +174,44 @@ function Workspace({
         c.lookAt(0, 1, 0);
         ctl.update();
       },
+      zoomIn: () => {
+        const dir = new THREE.Vector3().copy(c.position).sub(ctl.target);
+        dir.multiplyScalar(0.8);
+        c.position.copy(ctl.target).add(dir);
+        ctl.update();
+      },
+      zoomOut: () => {
+        const dir = new THREE.Vector3().copy(c.position).sub(ctl.target);
+        dir.multiplyScalar(1.25);
+        c.position.copy(ctl.target).add(dir);
+        ctl.update();
+      },
+      fitAll: () => {
+        const firstRoot = rootsRef.current.values().next().value ?? null;
+        if (firstRoot) frameObject(c, ctl, firstRoot);
+      },
+      resetView: () => {
+        ctl.target.set(0, 1, 0);
+        c.position.set(6, 4, 8);
+        c.lookAt(0, 1, 0);
+        ctl.update();
+      },
     });
   }, [camera, ready]);
+
+  // Track zoom percentage for toolbar display
+  useEffect(() => {
+    const ctl = controls.current;
+    if (!ctl || !onZoomChange) return;
+    const update = () => {
+      const dist = ctl.object.position.distanceTo(ctl.target);
+      const pct = Math.round(Math.max(10, Math.min(300, 300 - ((dist - 1) / 99) * 285)));
+      onZoomChange(pct);
+    };
+    update();
+    ctl.addEventListener('change', update);
+    return () => ctl.removeEventListener('change', update);
+  }, [controls.current, onZoomChange]);
 
   // Wire OrbitControls so TransformGizmo can disable them while dragging
   useEffect(() => {
