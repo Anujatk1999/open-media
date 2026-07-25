@@ -43,7 +43,7 @@ export const ComposerViewport = forwardRef<ComposerViewportAPI>(function Compose
       <Canvas
         className="composer-canvas"
         dpr={[1, 2]}
-        camera={{ fov: 42, near: 0.1, far: 1000 }}
+        camera={{ fov: 42, near: 0.1, far: 1000, position: [6, 4, 8] }}
       >
         <WorkspaceWithAPI grid={grid} axes={axes} ready={setApi} />
       </Canvas>
@@ -134,9 +134,6 @@ function Workspace({
   // Track Object3D roots keyed by mannequin id so we can frame selected.
   const rootsRef = useRef<Map<string, THREE.Object3D>>(new Map());
 
-  // Initial framing once the first mannequin is ready.
-  const [didInitialFrame, setDidInitialFrame] = useState(false);
-
   const target = useMemo(() => {
     if (selectedId) {
       return rootsRef.current.get(selectedId) ?? null;
@@ -149,36 +146,23 @@ function Workspace({
     const ctl = controls.current;
     if (!ctl) return;
 
-    const frameTarget = target ?? rootsRef.current.values().next().value ?? null;
-
-    const setup = () => {
-      if (frameTarget) {
-        frameObject(c, ctl, frameTarget);
-      }
-    };
-
     ready({
       view: (v) => {
-        if (frameTarget) setEditorView(c, ctl, frameTarget, v);
+        const firstRoot = rootsRef.current.values().next().value ?? null;
+        if (firstRoot) setEditorView(c, ctl, firstRoot, v);
       },
-      frame: setup,
-      reset: setup,
+      frame: () => {
+        const firstRoot = rootsRef.current.values().next().value ?? null;
+        if (firstRoot) frameObject(c, ctl, firstRoot);
+      },
+      reset: () => {
+        ctl.target.set(0, 1, 0);
+        c.position.set(6, 4, 8);
+        c.lookAt(0, 1, 0);
+        ctl.update();
+      },
     });
-
-    if (!didInitialFrame && frameTarget) {
-      setup();
-      setDidInitialFrame(true);
-    }
-  }, [camera, ready, target, didInitialFrame]);
-
-  // Re-frame when selection changes if there's a selected target.
-  useEffect(() => {
-    if (!target) return;
-    const c = camera as THREE.PerspectiveCamera;
-    const ctl = controls.current;
-    if (!ctl) return;
-    // Only auto-frame on first selection, not every click — keeps user's orbit.
-  }, [target]);
+  }, [camera, ready]);
 
   // Wire OrbitControls so TransformGizmo can disable them while dragging
   useEffect(() => {
@@ -194,7 +178,7 @@ function Workspace({
       <directionalLight position={[5, 8, 6]} intensity={2.1} />
       <directionalLight position={[-4, 3, -5]} intensity={0.5} />
 
-      {grid && <gridHelper args={[30, 30, '#3c464b', '#242c30']} />}
+      {grid && <gridHelper args={[100, 100, '#3c464b', '#242c30']} />}
       {axes && <axesHelper args={[1.4]} />}
 
       {/* Click empty space to deselect */}
@@ -244,8 +228,8 @@ function Workspace({
         enablePan
         enableRotate
         enableZoom
-        minDistance={1}
-        maxDistance={40}
+        minDistance={0.5}
+        maxDistance={Infinity}
         mouseButtons={{
           LEFT: THREE.MOUSE.ROTATE,
           RIGHT: THREE.MOUSE.PAN,
