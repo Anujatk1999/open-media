@@ -167,8 +167,13 @@ function Workspace({
     const c = camera as THREE.PerspectiveCamera;
     if (!controls) return;
 
-    // Set camera target to chest height so the scene is centered.
-    controls.target.set(0, 1, 0);
+    // Set camera target to mannequin center height so the scene is centered
+    // with equal space above and below. Must call update() immediately so
+    // OrbitControls internal state matches — without it the camera still
+    // looks at the default (0,0,0) ground level.
+    controls.target.set(0, 0.85, 0);
+    c.lookAt(0, 0.85, 0);
+    controls.update();
 
     ready({
       view: (v) => {
@@ -180,9 +185,9 @@ function Workspace({
         if (r) frameObject(c, controls, r);
       },
       reset: () => {
-        controls.target.set(0, 1, 0);
+        controls.target.set(0, 0.85, 0);
         c.position.set(6, 4, 8);
-        c.lookAt(0, 1, 0);
+        c.lookAt(0, 0.85, 0);
         controls.update();
       },
       zoomIn: () => {
@@ -202,9 +207,9 @@ function Workspace({
         if (r) frameObject(c, controls, r);
       },
       resetView: () => {
-        controls.target.set(0, 1, 0);
+        controls.target.set(0, 0.85, 0);
         c.position.set(6, 4, 8);
-        c.lookAt(0, 1, 0);
+        c.lookAt(0, 0.85, 0);
         controls.update();
       },
     });
