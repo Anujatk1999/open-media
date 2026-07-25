@@ -39,7 +39,6 @@ export default function TransformGizmo({ target, onDragStart, onDragEnd }: Trans
     const onStart = () => {
       isDraggingRef.current = true;
       pendingUpdate.current = null;
-      (ctrl as any).enabled = false;
       const orbit = (camera as any)?.__orbitControls;
       if (orbit) orbit.enabled = false;
       onDragStart?.();
@@ -51,7 +50,6 @@ export default function TransformGizmo({ target, onDragStart, onDragEnd }: Trans
         updateTransform(selectedId, pendingUpdate.current);
         pendingUpdate.current = null;
       }
-      (ctrl as any).enabled = true;
       const orbit = (camera as any)?.__orbitControls;
       if (orbit) orbit.enabled = true;
       onDragEnd?.();

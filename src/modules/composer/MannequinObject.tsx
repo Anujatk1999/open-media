@@ -58,10 +58,17 @@ const MannequinObject = forwardRef<MannequinHandle, Props>(function MannequinObj
     onReady?.(root.current);
   }, [type, onReady]);
 
-  // Apply transform
+  // Apply transform — only if the position actually differs from current.
+  // This prevents fighting with TransformControls during gizmo drag.
   useLayoutEffect(() => {
-    root.current.position.set(position[0], position[1], position[2]);
-    root.current.rotation.set(rotation[0], rotation[1], rotation[2]);
+    const p = root.current.position;
+    if (p.x !== position[0] || p.y !== position[1] || p.z !== position[2]) {
+      p.set(position[0], position[1], position[2]);
+    }
+    const r = root.current.rotation;
+    if (r.x !== rotation[0] || r.y !== rotation[1] || r.z !== rotation[2]) {
+      r.set(rotation[0], rotation[1], rotation[2]);
+    }
   }, [position, rotation]);
 
   // Apply posture

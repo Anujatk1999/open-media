@@ -138,7 +138,8 @@ function Workspace({
   onZoomChange?: (pct: number) => void;
 }) {
   const { camera } = useThree();
-  const controls = useRef<OrbitControlsType>(null);
+  // useState + callback ref ensures useLayoutEffect fires after controls mount.
+  const [controls, setControls] = useState<OrbitControlsType | null>(null);
   const mannequins = useComposerStore(s => s.mannequins);
   const selectedId = useComposerStore(s => s.selectedMannequinId);
   const selectMannequin = useComposerStore(s => s.selectMannequin);
@@ -155,7 +156,7 @@ function Workspace({
       return rootsRef.current.get(selectedId) ?? null;
     }
     return null;
-  }, [selectedId, mannequins]);
+  }, [selectedId]);
 
   // Keep selectedRootRef in sync with selection changes.
   useEffect(() => {
@@ -164,69 +165,70 @@ function Workspace({
 
   useLayoutEffect(() => {
     const c = camera as THREE.PerspectiveCamera;
-    const ctl = controls.current;
-    if (!ctl) return;
+    if (!controls) return;
+
+    // Set camera target to chest height so the scene is centered.
+    controls.target.set(0, 1, 0);
 
     ready({
       view: (v) => {
         const r = selectedRootRef.current;
-        if (r) setEditorView(c, ctl, r, v);
+        if (r) setEditorView(c, controls, r, v);
       },
       frame: () => {
         const r = selectedRootRef.current;
-        if (r) frameObject(c, ctl, r);
+        if (r) frameObject(c, controls, r);
       },
       reset: () => {
-        ctl.target.set(0, 1, 0);
+        controls.target.set(0, 1, 0);
         c.position.set(6, 4, 8);
         c.lookAt(0, 1, 0);
-        ctl.update();
+        controls.update();
       },
       zoomIn: () => {
-        const dir = new THREE.Vector3().copy(c.position).sub(ctl.target);
+        const dir = new THREE.Vector3().copy(c.position).sub(controls.target);
         dir.multiplyScalar(0.8);
-        c.position.copy(ctl.target).add(dir);
-        ctl.update();
+        c.position.copy(controls.target).add(dir);
+        controls.update();
       },
       zoomOut: () => {
-        const dir = new THREE.Vector3().copy(c.position).sub(ctl.target);
+        const dir = new THREE.Vector3().copy(c.position).sub(controls.target);
         dir.multiplyScalar(1.25);
-        c.position.copy(ctl.target).add(dir);
-        ctl.update();
+        c.position.copy(controls.target).add(dir);
+        controls.update();
       },
       fitAll: () => {
         const r = selectedRootRef.current;
-        if (r) frameObject(c, ctl, r);
+        if (r) frameObject(c, controls, r);
       },
       resetView: () => {
-        ctl.target.set(0, 1, 0);
+        controls.target.set(0, 1, 0);
         c.position.set(6, 4, 8);
         c.lookAt(0, 1, 0);
-        ctl.update();
+        controls.update();
       },
     });
-  }, [camera, ready]);
+  }, [camera, controls]);
 
   // Track zoom percentage for toolbar display
   useEffect(() => {
-    const ctl = controls.current;
-    if (!ctl || !onZoomChange) return;
+    if (!controls || !onZoomChange) return;
     const update = () => {
-      const dist = ctl.object.position.distanceTo(ctl.target);
+      const dist = controls.object.position.distanceTo(controls.target);
       const pct = Math.round(Math.max(10, Math.min(300, 300 - ((dist - 1) / 99) * 285)));
       onZoomChange(pct);
     };
     update();
-    ctl.addEventListener('change', update);
-    return () => ctl.removeEventListener('change', update);
-  }, [controls.current, onZoomChange]);
+    controls.addEventListener('change', update);
+    return () => controls.removeEventListener('change', update);
+  }, [controls, onZoomChange]);
 
   // Wire OrbitControls so TransformGizmo can disable them while dragging
   useEffect(() => {
-    if (controls.current) {
-      (camera as any).__orbitControls = controls.current;
+    if (controls) {
+      (camera as any).__orbitControls = controls;
     }
-  }, [camera, controls.current]);
+  }, [camera, controls]);
 
   return (
     <>
@@ -279,7 +281,7 @@ function Workspace({
       <TransformGizmo target={target} />
 
       <OrbitControls
-        ref={controls}
+        ref={(el: OrbitControlsType | null) => { if (el && el !== controls) setControls(el); }}
         enableDamping
         dampingFactor={0.08}
         enablePan
