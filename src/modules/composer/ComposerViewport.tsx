@@ -1,13 +1,15 @@
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsType } from 'three-stdlib';
 import { frameObject, getObjectBounds, setEditorView, type EditorView } from './cameraUtils';
 import { useComposerStore } from '../../stores/composerStore';
 import MannequinObject from './MannequinObject';
+import type { MannequinHandle } from './MannequinObject';
 import TransformGizmo from './TransformGizmo';
 import WorkspaceToolbar from './WorkspaceToolbar';
+import { getJoint, setDOF, JOINT_CONFIGS } from './helpers/jointConfig';
 
 type WorkspaceApi = {
   view: (v: EditorView) => void;
@@ -15,10 +17,26 @@ type WorkspaceApi = {
   reset: () => void;
 };
 
-export function ComposerViewport() {
+export interface ComposerViewportAPI {
+  setJoint: (mannequinId: string, configKey: string, dofIndex: number, value: number) => void;
+  getJointValues: (mannequinId: string) => Record<string, number>;
+}
+
+const workspaceAPIRef: { current: ComposerViewportAPI | null } = { current: null };
+
+export const ComposerViewport = forwardRef<ComposerViewportAPI>(function ComposerViewport(_props, ref) {
   const [api, setApi] = useState<WorkspaceApi | null>(null);
   const [grid, setGrid] = useState(true);
   const [axes, setAxes] = useState(false);
+
+  useImperativeHandle(ref, () => ({
+    setJoint(...args: Parameters<ComposerViewportAPI['setJoint']>) {
+      workspaceAPIRef.current?.setJoint(...args);
+    },
+    getJointValues(...args: Parameters<ComposerViewportAPI['getJointValues']>) {
+      return workspaceAPIRef.current?.getJointValues(...args) ?? {};
+    },
+  }), []);
 
   return (
     <div className="composer-viewport">
@@ -27,7 +45,7 @@ export function ComposerViewport() {
         dpr={[1, 2]}
         camera={{ fov: 42, near: 0.1, far: 1000 }}
       >
-        <Workspace grid={grid} axes={axes} ready={setApi} />
+        <WorkspaceWithAPI grid={grid} axes={axes} ready={setApi} />
       </Canvas>
       <div className="workspace-toolbar">
         <WorkspaceToolbar />
@@ -47,16 +65,64 @@ export function ComposerViewport() {
       </div>
     </div>
   );
+});
+
+function WorkspaceWithAPI(props: { grid: boolean; axes: boolean; ready: (api: WorkspaceApi) => void }) {
+  const updatePosture = useComposerStore(s => s.updateMannequinPosture);
+  const localMannequinRefs = useRef<Map<string, MannequinHandle>>(new Map());
+
+  const api = useMemo((): ComposerViewportAPI => ({
+    setJoint(mannequinId, configKey, dofIndex, value) {
+      const handle = localMannequinRefs.current.get(mannequinId);
+      if (!handle?.mannequin) return;
+      const m = handle.mannequin as any;
+      const joint = getJoint(m, configKey);
+      if (!joint) return;
+      const config = JOINT_CONFIGS.find(c => c.mannequinKey === configKey);
+      if (!config) return;
+      const accessor = config.dofs[dofIndex]?.accessor;
+      if (!accessor) return;
+      setDOF(joint, accessor, value);
+      m.updateMatrixWorld(true);
+      if (typeof m.stepOnGround === "function") m.stepOnGround();
+      const posture = m.posture;
+      if (posture) updatePosture(mannequinId, posture);
+    },
+    getJointValues(mannequinId) {
+      const handle = localMannequinRefs.current.get(mannequinId);
+      if (!handle?.mannequin) return {};
+      const m = handle.mannequin as any;
+      const result: Record<string, number> = {};
+      for (const config of JOINT_CONFIGS) {
+        const joint = getJoint(m, config.mannequinKey);
+        if (!joint) continue;
+        config.dofs.forEach((dof, idx) => {
+          try {
+            result[`${config.mannequinKey}:${idx}`] = joint[dof.accessor];
+          } catch {
+            result[`${config.mannequinKey}:${idx}`] = 0;
+          }
+        });
+      }
+      return result;
+    },
+  }), [updatePosture]);
+
+  workspaceAPIRef.current = api;
+
+  return <Workspace grid={props.grid} axes={props.axes} ready={props.ready} mannequinRefs={localMannequinRefs} />;
 }
 
 function Workspace({
   grid,
   axes,
   ready,
+  mannequinRefs,
 }: {
   grid: boolean;
   axes: boolean;
   ready: (api: WorkspaceApi) => void;
+  mannequinRefs: React.MutableRefObject<Map<string, MannequinHandle>>;
 }) {
   const { camera } = useThree();
   const controls = useRef<OrbitControlsType>(null);
@@ -148,16 +214,23 @@ function Workspace({
       {mannequins.map((m) => (
         <MannequinObject
           key={m.id}
+          ref={(handle: MannequinHandle | null) => {
+            if (handle) {
+              mannequinRefs.current.set(m.id, handle);
+              rootsRef.current.set(m.id, handle.root);
+            } else {
+              mannequinRefs.current.delete(m.id);
+              rootsRef.current.delete(m.id);
+            }
+          }}
           id={m.id}
           type={m.type}
           name={m.name}
           position={m.transform.position}
           rotation={m.transform.rotation}
+          posture={m.posture}
           visible={m.visible}
           selected={m.id === selectedId}
-          onReady={(obj) => {
-            rootsRef.current.set(m.id, obj);
-          }}
           onSelect={selectMannequin}
         />
       ))}

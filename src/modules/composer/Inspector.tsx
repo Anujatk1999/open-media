@@ -1,4 +1,5 @@
 import type { MannequinSceneObject, MannequinTransform } from "../../stores/composerStore";
+import JointControls from "./JointControls";
 
 interface InspectorProps {
   character: MannequinSceneObject | null;
@@ -8,6 +9,8 @@ interface InspectorProps {
   onDuplicate: (id: string) => void;
   onDelete: (id: string) => void;
   onUpdateTransform: (id: string, transform: Partial<MannequinTransform>) => void;
+  jointValues?: Record<string, number>;
+  onJointChange?: (configKey: string, dofIndex: number, value: number) => void;
 }
 
 export default function Inspector({
@@ -18,6 +21,8 @@ export default function Inspector({
   onDuplicate,
   onDelete,
   onUpdateTransform,
+  jointValues,
+  onJointChange,
 }: InspectorProps) {
   if (!character) {
     return (
@@ -154,7 +159,13 @@ export default function Inspector({
 
       <section>
         <h3>POSE</h3>
-        <p className="muted">Pose editing arrives in Phase 4.</p>
+        <JointControls
+          values={jointValues ?? {}}
+          onChange={(config, dofIndex, value) => {
+            onJointChange?.(config.mannequinKey, dofIndex, value);
+          }}
+          disabled={character.locked}
+        />
       </section>
     </>
   );

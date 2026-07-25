@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ShapeRecognitionDev } from '../modules/dev/ShapeRecognitionDev';
-import { ComposerViewport } from '../modules/composer/ComposerViewport';
+import { ComposerViewport, type ComposerViewportAPI } from '../modules/composer/ComposerViewport';
 import { SketchboardStage } from '../modules/sketchboard/SketchboardStage';
 import { useBridgeStore } from '../stores/bridgeStore';
 import { useComposerStore } from '../stores/composerStore';
@@ -45,6 +45,25 @@ function ComposerShell() {
   const renameMannequin = useComposerStore(s => s.renameMannequin);
   const updateMannequinTransform = useComposerStore(s => s.updateMannequinTransform);
 
+  const viewportRef = useRef<ComposerViewportAPI>(null);
+  const [jointValues, setJointValues] = useState<Record<string, number>>({});
+
+  const handleJointChange = useCallback((configKey: string, dofIndex: number, value: number) => {
+    if (!selectedId || !viewportRef.current) return;
+    viewportRef.current.setJoint(selectedId, configKey, dofIndex, value);
+    const key = `${configKey}:${dofIndex}`;
+    setJointValues(prev => ({ ...prev, [key]: value }));
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId || !viewportRef.current) {
+      setJointValues({});
+      return;
+    }
+    const vals = viewportRef.current.getJointValues(selectedId);
+    setJointValues(vals);
+  }, [selectedId]);
+
   const selected = characters.find(c => c.id === selectedId) ?? null;
 
   return (
@@ -63,7 +82,7 @@ function ComposerShell() {
         />
       </aside>
       <section className="composer-center">
-        <ComposerViewport/>
+        <ComposerViewport ref={viewportRef} />
       </section>
       <aside className="inspector">
         <h2>INSPECTOR</h2>
@@ -75,6 +94,8 @@ function ComposerShell() {
           onDuplicate={duplicateMannequin}
           onDelete={deleteMannequin}
           onUpdateTransform={updateMannequinTransform}
+          jointValues={jointValues}
+          onJointChange={handleJointChange}
         />
       </aside>
     </div>
