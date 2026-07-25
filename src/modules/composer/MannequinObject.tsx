@@ -7,6 +7,28 @@ import {
   type CharacterType,
 } from "./helpers/mannequinFactory";
 
+// Body part names for click-to-select in Pose Mode.
+// Maps mesh children to their parent joint key on the mannequin.
+const POSE_PARTS: [string, string[]][] = [
+  ["head", ["head"]],
+  ["neck", ["neck"]],
+  ["torso", ["torso"]],
+  ["body", ["body"]],
+  ["pelvis", ["pelvis"]],
+  ["l_arm", ["l_arm"]],
+  ["l_elbow", ["l_elbow"]],
+  ["l_wrist", ["l_wrist"]],
+  ["l_leg", ["l_leg"]],
+  ["l_knee", ["l_knee"]],
+  ["l_ankle", ["l_ankle"]],
+  ["r_arm", ["r_arm"]],
+  ["r_elbow", ["r_elbow"]],
+  ["r_wrist", ["r_wrist"]],
+  ["r_leg", ["r_leg"]],
+  ["r_knee", ["r_knee"]],
+  ["r_ankle", ["r_ankle"]],
+];
+
 interface Props {
   id: string;
   type?: CharacterType;

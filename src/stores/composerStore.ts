@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type ComposerTool = "move" | "rotate";
+export type ComposerTool = "move" | "rotate" | "pose";
 
 export type CharacterType =
   | "male"

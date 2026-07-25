@@ -9,6 +9,7 @@ import MannequinObject from './MannequinObject';
 import type { MannequinHandle } from './MannequinObject';
 import TransformGizmo from './TransformGizmo';
 import WorkspaceToolbar from './WorkspaceToolbar';
+import PoseControls from './PoseControls';
 import { getJoint, setDOF, JOINT_CONFIGS } from './helpers/jointConfig';
 
 type WorkspaceApi = {
@@ -283,6 +284,7 @@ function Workspace({
         />
       ))}
 
+      <PoseControls />
       <TransformGizmo target={target} />
 
       <OrbitControls

@@ -3,7 +3,7 @@ import { TransformControls } from "@react-three/drei";
 import type { TransformControls as TransformControlsType } from "three-stdlib";
 import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
-import { useComposerStore } from "../../stores/composerStore";
+import { useComposerStore, type ComposerTool } from "../../stores/composerStore";
 
 interface TransformGizmoProps {
   target: THREE.Object3D | null;
@@ -22,10 +22,11 @@ export default function TransformGizmo({ target, onDragStart, onDragEnd }: Trans
   const selected = mannequins.find(m => m.id === selectedId);
   const isLocked = selected?.locked ?? true;
 
-  // Sync mode from store
+  // Sync mode from store (only for move/rotate, pose is handled separately)
   useEffect(() => {
     if (!controlsRef.current) return;
-    controlsRef.current.setMode(activeTool === "move" ? "translate" : "rotate");
+    if (activeTool === "move") controlsRef.current.setMode("translate");
+    else if (activeTool === "rotate") controlsRef.current.setMode("rotate");
   }, [activeTool]);
 
   // Track drag state explicitly — don't rely on controls.enabled timing.
@@ -91,7 +92,8 @@ export default function TransformGizmo({ target, onDragStart, onDragEnd }: Trans
     }
   }, [selected?.transform.position, selected?.transform.rotation, target]);
 
-  if (!target || isLocked) return null;
+  // Don't show TransformGizmo in Pose mode — pose editing is independent
+  if (activeTool === "pose" || !target || isLocked) return null;
 
   return (
     <TransformControls

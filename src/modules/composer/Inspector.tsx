@@ -1,4 +1,5 @@
 import type { MannequinSceneObject, MannequinTransform } from "../../stores/composerStore";
+import { useComposerStore } from "../../stores/composerStore";
 import JointControls from "./JointControls";
 
 interface InspectorProps {
@@ -24,6 +25,9 @@ export default function Inspector({
   jointValues,
   onJointChange,
 }: InspectorProps) {
+  const activeTool = useComposerStore((s) => s.activeTool);
+  const isPoseMode = activeTool === "pose";
+
   if (!character) {
     return (
       <p className="muted" style={{ fontSize: 12 }}>
@@ -129,6 +133,7 @@ export default function Inspector({
         <h3>STATUS</h3>
         <p className="status">● {character.visible ? "Visible" : "Hidden"}</p>
         <p className="status">● {character.locked ? "Locked" : "Unlocked"}</p>
+        <p className="status">● {isPoseMode ? "Pose Mode" : "Transform Mode"}</p>
         <div className="inspector-actions">
           <button
             className="inspector-btn"
@@ -159,13 +164,29 @@ export default function Inspector({
 
       <section>
         <h3>POSE</h3>
-        <JointControls
-          values={jointValues ?? {}}
-          onChange={(config, dofIndex, value) => {
-            onJointChange?.(config.mannequinKey, dofIndex, value);
-          }}
-          disabled={character.locked}
-        />
+        {isPoseMode ? (
+          <p className="muted" style={{ fontSize: 11, lineHeight: 1.5 }}>
+            In Pose Mode, click a body part in the viewport to select a joint, then drag to rotate it.
+          </p>
+        ) : (
+          <p className="muted" style={{ fontSize: 11, lineHeight: 1.5 }}>
+            Switch to <b>Pose</b> tool mode to edit joints in the viewport by clicking and dragging body parts.
+          </p>
+        )}
+        <details style={{ marginTop: 8 }}>
+          <summary style={{ fontSize: 10, color: '#758085', cursor: 'pointer', userSelect: 'none' }}>
+            Fine-adjust sliders
+          </summary>
+          <div style={{ marginTop: 6 }}>
+            <JointControls
+              values={jointValues ?? {}}
+              onChange={(config, dofIndex, value) => {
+                onJointChange?.(config.mannequinKey, dofIndex, value);
+              }}
+              disabled={character.locked}
+            />
+          </div>
+        </details>
       </section>
     </>
   );

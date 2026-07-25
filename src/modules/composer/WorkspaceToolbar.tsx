@@ -20,6 +20,13 @@ export default function WorkspaceToolbar() {
       >
         Rotate
       </button>
+      <button
+        className={activeTool === "pose" ? "on" : ""}
+        onClick={() => setActiveTool("pose")}
+        title="Pose (rotate body parts)"
+      >
+        Pose
+      </button>
     </div>
   );
 }
