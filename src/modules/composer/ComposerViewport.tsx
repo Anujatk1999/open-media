@@ -7,6 +7,7 @@ import { frameObject, getObjectBounds, setEditorView, type EditorView } from './
 import { useComposerStore } from '../../stores/composerStore';
 import MannequinObject from './MannequinObject';
 import TransformGizmo from './TransformGizmo';
+import WorkspaceToolbar from './WorkspaceToolbar';
 
 type WorkspaceApi = {
   view: (v: EditorView) => void;
@@ -29,6 +30,8 @@ export function ComposerViewport() {
         <Workspace grid={grid} axes={axes} ready={setApi} />
       </Canvas>
       <div className="workspace-toolbar">
+        <WorkspaceToolbar />
+        <i/>
         <span>Orbit <b>Left drag</b></span>
         <span>Pan <b>Right drag</b></span>
         <span>Zoom <b>Wheel</b></span>
