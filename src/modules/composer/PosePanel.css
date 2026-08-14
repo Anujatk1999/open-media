@@ -1,0 +1,94 @@
+.pose-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pose-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pose-library {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 210px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.pose-entry {
+  display: flex;
+  gap: 4px;
+}
+
+.pose-preset-btn {
+  flex: 1;
+  text-align: left;
+  padding: 5px 8px;
+  font-size: 11px;
+  color: #c8d0d4;
+  background: #1c2126;
+  border: 1px solid #2c343a;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.pose-preset-btn:hover {
+  border-color: #4a565d;
+}
+
+.pose-preset-btn.active {
+  color: #15191d;
+  background: #d6ff53;
+  border-color: #d6ff53;
+}
+
+.pose-delete-btn {
+  width: 22px;
+  color: #869094;
+  background: #1c2126;
+  border: 1px solid #2c343a;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.pose-delete-btn:hover {
+  color: #ff6b6b;
+}
+
+.pose-save-row {
+  display: flex;
+  gap: 4px;
+}
+
+.pose-name-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 11px;
+  color: #e5eaec;
+  background: #12161a;
+  border: 1px solid #2c343a;
+  border-radius: 4px;
+}
+
+.pose-button-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.pose-scale {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inspector-btn.on {
+  color: #15191d;
+  background: #d6ff53;
+  border-color: #d6ff53;
+}

@@ -4,6 +4,8 @@ export interface JointDOF {
   label: string;
   /** The accessor property name on the joint object (getter/setter) */
   accessor: string;
+  /** Sub-joint the accessor lives on. Fingers carry their phalanges as `.mid` / `.tip`. */
+  on?: "mid" | "tip";
   /** Minimum angle in degrees */
   min: number;
   /** Maximum angle in degrees */
@@ -30,32 +32,63 @@ export function getJoint(mannequin: any, key: string): any {
   return (mannequin as any)[key];
 }
 
-/**
- * Get a DOF value from a joint.
- * e.g. getDOF(mannequin.l_arm, "raise") → number
- */
-export function getDOF(joint: any, accessor: string): number {
-  // Some joints have named getters (e.g. arm.raise), others use raw x/y/z
-  if (typeof joint[accessor] === "number") {
-    // It's a plain property (e.g. raw x/y/z stored as degrees on the joint)
-    return joint[accessor];
-  }
-  // It's a getter/setter
-  return joint[accessor];
+/** The object the DOF's accessor actually lives on — the joint, or one of its phalanges. */
+function dofTarget(joint: any, dof: JointDOF): any {
+  return dof.on ? joint?.[dof.on] : joint;
 }
 
 /**
- * Set a DOF value on a joint.
+ * Get a DOF value in degrees.
+ * e.g. getDOF(mannequin.l_arm, { accessor: "raise", ... }) → number
  */
-export function setDOF(joint: any, accessor: string, value: number): void {
-  if (typeof joint[accessor] === "number") {
-    joint[accessor] = value;
-  } else {
-    joint[accessor] = value;
-  }
+export function getDOF(joint: any, dof: JointDOF): number {
+  return dofTarget(joint, dof)?.[dof.accessor] ?? 0;
 }
 
-/** Full joint configuration list */
+/** Set a DOF value in degrees. */
+export function setDOF(joint: any, dof: JointDOF, value: number): void {
+  const target = dofTarget(joint, dof);
+  if (target) target[dof.accessor] = value;
+}
+
+const FINGER_NAMES = ["Thumb", "Index", "Middle", "Ring", "Little"];
+
+/** Straddle range per finger index, from Finger.js `minXbase`/`maxXbase`. Side-independent. */
+const FINGER_STRADDLE: [number, number][] = [
+  [-50, 0],
+  [-35, 20],
+  [-15, 15],
+  [-15, 25],
+  [-20, 35],
+];
+
+/**
+ * A finger is one posture entry carrying its own [x,y,z] plus mid/tip bends,
+ * so all five DOFs below belong to the same `l_finger_n` / `r_finger_n` key.
+ * The thumb is the only finger with a meaningful turn.
+ */
+function fingerConfig(side: "l" | "r", n: number): JointConfig {
+  const thumb = n === 0;
+  const [straddleMin, straddleMax] = FINGER_STRADDLE[n];
+  const dofs: JointDOF[] = [
+    { label: "Bend", accessor: "bend", min: thumb ? -90 : -10, max: thumb ? 45 : 120, step: 1 },
+    { label: "Straddle", accessor: "straddle", min: straddleMin, max: straddleMax, step: 1 },
+  ];
+  if (thumb) dofs.push({ label: "Turn", accessor: "turn", min: 90, max: 180, step: 1 });
+  dofs.push({ label: "Mid Bend", accessor: "bend", on: "mid", min: 0, max: thumb ? 90 : 120, step: 1 });
+  dofs.push({ label: "Tip Bend", accessor: "bend", on: "tip", min: 0, max: thumb ? 90 : 120, step: 1 });
+  return {
+    label: `${side === "l" ? "Left" : "Right"} ${FINGER_NAMES[n]}`,
+    mannequinKey: `${side}_finger_${n}`,
+    dofs,
+  };
+}
+
+/**
+ * Every joint the v7 posture serializes, in POSTURE_ENTRIES order per limb.
+ * `pelvis` and `neck` are omitted on purpose: they exist in the chain but are
+ * absent from `posture.data`, so edits to them are silently lost on save.
+ */
 export const JOINT_CONFIGS: JointConfig[] = [
   {
     label: "Body",
@@ -73,24 +106,6 @@ export const JOINT_CONFIGS: JointConfig[] = [
       { label: "Bend", accessor: "bend", min: -60, max: 25, step: 1 },
       { label: "Tilt", accessor: "tilt", min: -25, max: 25, step: 1 },
       { label: "Turn", accessor: "turn", min: -50, max: 50, step: 1 },
-    ],
-  },
-  {
-    label: "Pelvis",
-    mannequinKey: "pelvis",
-    dofs: [
-      { label: "X", accessor: "x", min: -30, max: 30, step: 1 },
-      { label: "Y", accessor: "y", min: -30, max: 30, step: 1 },
-      { label: "Z", accessor: "z", min: -30, max: 30, step: 1 },
-    ],
-  },
-  {
-    label: "Neck",
-    mannequinKey: "neck",
-    dofs: [
-      { label: "X", accessor: "x", min: -22, max: 22, step: 1 },
-      { label: "Y", accessor: "y", min: -45, max: 45, step: 1 },
-      { label: "Z", accessor: "z", min: -60, max: 25, step: 1 },
     ],
   },
   {
@@ -202,4 +217,6 @@ export const JOINT_CONFIGS: JointConfig[] = [
       { label: "Turn", accessor: "turn", min: -30, max: 30, step: 1 },
     ],
   },
+  ...[0, 1, 2, 3, 4].map((n) => fingerConfig("l", n)),
+  ...[0, 1, 2, 3, 4].map((n) => fingerConfig("r", n)),
 ];

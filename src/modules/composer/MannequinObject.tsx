@@ -1,33 +1,14 @@
 import { useLayoutEffect, useRef, useImperativeHandle, forwardRef } from "react";
 import * as THREE from "three";
 import type { ThreeEvent } from "@react-three/fiber";
+import { useComposerStore } from "../../stores/composerStore";
 
 import {
   createMannequin,
+  removeMannequinCanvases,
   type CharacterType,
 } from "./helpers/mannequinFactory";
-
-// Body part names for click-to-select in Pose Mode.
-// Maps mesh children to their parent joint key on the mannequin.
-const POSE_PARTS: [string, string[]][] = [
-  ["head", ["head"]],
-  ["neck", ["neck"]],
-  ["torso", ["torso"]],
-  ["body", ["body"]],
-  ["pelvis", ["pelvis"]],
-  ["l_arm", ["l_arm"]],
-  ["l_elbow", ["l_elbow"]],
-  ["l_wrist", ["l_wrist"]],
-  ["l_leg", ["l_leg"]],
-  ["l_knee", ["l_knee"]],
-  ["l_ankle", ["l_ankle"]],
-  ["r_arm", ["r_arm"]],
-  ["r_elbow", ["r_elbow"]],
-  ["r_wrist", ["r_wrist"]],
-  ["r_leg", ["r_leg"]],
-  ["r_knee", ["r_knee"]],
-  ["r_ankle", ["r_ankle"]],
-];
+import { describePostureError, readPosture, writePosture, type Posture } from "./helpers/posture";
 
 interface Props {
   id: string;
@@ -35,7 +16,7 @@ interface Props {
   name?: string;
   position: [number, number, number];
   rotation: [number, number, number];
-  posture?: { version: number; data: number[][] };
+  posture?: Posture;
   visible?: boolean;
   selected?: boolean;
   onReady?: (object: THREE.Object3D) => void;
@@ -65,20 +46,47 @@ const MannequinObject = forwardRef<MannequinHandle, Props>(function MannequinObj
 ) {
   const root = useRef(new THREE.Group());
   const mannequinRef = useRef<THREE.Object3D | null>(null);
+  const registerInstance = useComposerStore(s => s.registerObjectInstance);
+  const unregisterInstance = useComposerStore(s => s.unregisterObjectInstance);
 
   useImperativeHandle(ref, () => ({
     root: root.current,
     mannequin: mannequinRef.current,
   }));
 
-  // Create/replace mannequin when type changes
+  // Create/replace mannequin when type changes.
+  // The store registry holds the mannequin itself, not `root` — every consumer
+  // reaches for `.posture` or a joint key, neither of which the wrapper Group
+  // carries.
   useLayoutEffect(() => {
-    const mannequin = createMannequin({ type });
-    root.current.clear();
-    root.current.add(mannequin);
-    mannequinRef.current = mannequin;
-    onReady?.(root.current);
-  }, [type, onReady]);
+    let mounted = true;
+    const updateDefaultPosture = useComposerStore.getState().updateObjectDefaultPosture;
+    createMannequin({ type }).then(mannequin => {
+      if (!mounted) return;
+      root.current.clear();
+      root.current.add(mannequin);
+      mannequinRef.current = mannequin;
+      registerInstance(id, mannequin);
+      onReady?.(root.current);
+
+      // Capture the default posture after mannequin is fully initialized
+      // The mannequin-js constructor sets up the default pose with non-zero values
+      updateDefaultPosture(id, readPosture(mannequin));
+
+      // A figure re-created by Undo must come back in its stored pose. The
+      // posture effect below cannot do it: it already ran, before this async
+      // build produced a figure to write to, and its dep has not changed since.
+      const stored = useComposerStore.getState().objects.find(o => o.id === id)?.posture;
+      if (stored) writePosture(mannequin, stored);
+    });
+    return () => {
+      mounted = false;
+      unregisterInstance(id);
+      // Remove any canvas injected by mannequin-js when this component unmounts.
+      // This prevents orphaned full-screen canvases covering other routes.
+      removeMannequinCanvases();
+    };
+  }, [type, id, onReady, registerInstance, unregisterInstance]);
 
   // Apply transform — only if the position actually differs from current.
   // This prevents fighting with TransformControls during gizmo drag.
@@ -93,29 +101,22 @@ const MannequinObject = forwardRef<MannequinHandle, Props>(function MannequinObj
     }
   }, [position, rotation]);
 
-  // Apply posture
+  // Apply posture — never re-ground here. Grounding moves the whole rig, so
+  // doing it per posture write would fight a live gizmo drag. The actions that
+  // do want it (Ground, Reset Pose, applyPosture, motion frames) call
+  // groundFigure() themselves.
   useLayoutEffect(() => {
     const m = mannequinRef.current as any;
     if (!m || !posture) return;
-    try {
-      m.posture = posture;
-      m.updateMatrixWorld(true);
-      if (typeof m.stepOnGround === "function") {
-        m.stepOnGround();
-      }
-    } catch {
-      // Silently ignore posture version mismatches on stale data
+    const error = describePostureError(posture);
+    if (error) {
+      console.error(`[MannequinObject] ignoring invalid posture: ${error}`);
+      return;
     }
+    writePosture(m, posture);
   }, [posture]);
 
-  // Selection highlight
-  useLayoutEffect(() => {
-    const m = mannequinRef.current as any;
-    if (!m) return;
-    if (typeof m.select === "function") {
-      m.select(selected);
-    }
-  }, [selected]);
+  // Selection highlight — handled per-joint by JointGizmo.
 
   return (
     <primitive
@@ -123,6 +124,7 @@ const MannequinObject = forwardRef<MannequinHandle, Props>(function MannequinObj
       visible={visible}
       onClick={(e: ThreeEvent<MouseEvent>) => {
         e.stopPropagation();
+        console.log("[MannequinObject] body clicked, id:", id, "type:", type);
         onSelect?.(id);
       }}
     />

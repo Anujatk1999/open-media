@@ -1,0 +1,47 @@
+{
+  "name": "shot-composer",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Browser-based 3D shot composer for previsualization — pose figures, block out scenes, and export frame references.",
+  "license": "MIT",
+  "homepage": "https://github.com/Anujatk1999/open-media#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Anujatk1999/open-media.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Anujatk1999/open-media/issues"
+  },
+  "keywords": [
+    "previsualization",
+    "storyboard",
+    "3d",
+    "three-js",
+    "react-three-fiber",
+    "mannequin",
+    "pose",
+    "shot-composition"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.1",
+    "mannequin-js": "5.2.3",
+    "react": "latest",
+    "react-dom": "latest",
+    "react-router-dom": "^7.18.2",
+    "three": "0.185.1",
+    "zustand": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  }
+}

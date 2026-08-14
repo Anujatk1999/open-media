@@ -1,17 +1,19 @@
-import type { MannequinSceneObject, MannequinTransform } from "../../stores/composerStore";
+import type { SceneObject, SceneTransform } from "../../stores/composerStore";
 import { useComposerStore } from "../../stores/composerStore";
-import JointControls from "./JointControls";
+import PosePanel from "./PosePanel";
+import { type EditorView } from "./cameraUtils";
+import "./Inspector.css";
 
 interface InspectorProps {
-  character: MannequinSceneObject | null;
+  character: SceneObject | null;
   onRename: (id: string, name: string) => void;
   onToggleVisibility: (id: string) => void;
   onToggleLock: (id: string) => void;
   onDuplicate: (id: string) => void;
   onDelete: (id: string) => void;
-  onUpdateTransform: (id: string, transform: Partial<MannequinTransform>) => void;
-  jointValues?: Record<string, number>;
-  onJointChange?: (configKey: string, dofIndex: number, value: number) => void;
+  onUpdateTransform: (id: string, transform: Partial<SceneTransform>) => void;
+  onSetCameraView?: (view: EditorView) => void;
+  onResetCamera?: () => void;
 }
 
 export default function Inspector({
@@ -22,173 +24,252 @@ export default function Inspector({
   onDuplicate,
   onDelete,
   onUpdateTransform,
-  jointValues,
-  onJointChange,
+  onSetCameraView,
+  onResetCamera,
 }: InspectorProps) {
   const activeTool = useComposerStore((s) => s.activeTool);
+  const resetObjectTransform = useComposerStore((s) => s.resetObjectTransform);
   const isPoseMode = activeTool === "pose";
+  const isMannequin = character && ["male", "female", "child"].includes(character.type);
 
   if (!character) {
     return (
-      <p className="muted" style={{ fontSize: 12 }}>
-        No character selected.
+      <p className="inspector-empty">
+        No object selected.
       </p>
     );
   }
 
   return (
-    <>
-      <section>
-        <h3>{character.name.toUpperCase()}</h3>
-        <p className="muted">
-          {character.type.charAt(0).toUpperCase() + character.type.slice(1)} mannequin
-        </p>
-        <p className="muted" style={{ fontSize: 10, opacity: 0.6 }}>
-          id: {character.id.slice(0, 8)}…
-        </p>
-      </section>
+    <div className="inspector-cards">
+      {/* OBJECT CARD */}
+      <details className="inspector-card" open>
+        <summary className="inspector-card-header">
+          <span className="inspector-card-title">Object</span>
+        </summary>
+        <div className="inspector-card-content">
+          <div className="character-header">
+            <h3 className="character-name">{character.name}</h3>
+            <span className="character-type">
+              {character.type.charAt(0).toUpperCase() + character.type.slice(1)}
+              {isMannequin ? " mannequin" : " primitive"}
+            </span>
+          </div>
+          <p className="character-id">id: {character.id.slice(0, 8)}…</p>
+        </div>
+      </details>
 
-      <section>
-        <h3>NAME</h3>
-        <input
-          className="inspector-input"
-          value={character.name}
-          onChange={(e) => onRename(character.id, e.target.value)}
-        />
-      </section>
+      {/* CAMERA ANGLES CARD */}
+      <details className="inspector-card">
+        <summary className="inspector-card-header">
+          <span className="inspector-card-title">Camera Angles</span>
+        </summary>
+        <div className="inspector-card-content">
+          <CameraAnglesPanel
+            onSetCameraView={onSetCameraView}
+            onResetCamera={onResetCamera}
+          />
+        </div>
+      </details>
 
-      <section>
-        <h3>TRANSFORM</h3>
-        <p className="section-label">POSITION</p>
-        <NumberInput
-          label="X"
-          value={character.transform.position[0]}
-          step={0.01}
-          disabled={character.locked}
-          onChange={(v) =>
-            onUpdateTransform(character.id, {
-              position: [v, character.transform.position[1], character.transform.position[2]],
-            })
-          }
-        />
-        <NumberInput
-          label="Y"
-          value={character.transform.position[1]}
-          step={0.01}
-          disabled={character.locked}
-          onChange={(v) =>
-            onUpdateTransform(character.id, {
-              position: [character.transform.position[0], v, character.transform.position[2]],
-            })
-          }
-        />
-        <NumberInput
-          label="Z"
-          value={character.transform.position[2]}
-          step={0.01}
-          disabled={character.locked}
-          onChange={(v) =>
-            onUpdateTransform(character.id, {
-              position: [character.transform.position[0], character.transform.position[1], v],
-            })
-          }
-        />
-        <p className="section-label">ROTATION</p>
-        <NumberInput
-          label="X"
-          value={radToDeg(character.transform.rotation[0])}
-          step={0.1}
-          disabled={character.locked}
-          onChange={(v) =>
-            onUpdateTransform(character.id, {
-              rotation: [degToRad(v), character.transform.rotation[1], character.transform.rotation[2]],
-            })
-          }
-        />
-        <NumberInput
-          label="Y"
-          value={radToDeg(character.transform.rotation[1])}
-          step={0.1}
-          disabled={character.locked}
-          onChange={(v) =>
-            onUpdateTransform(character.id, {
-              rotation: [character.transform.rotation[0], degToRad(v), character.transform.rotation[2]],
-            })
-          }
-        />
-        <NumberInput
-          label="Z"
-          value={radToDeg(character.transform.rotation[2])}
-          step={0.1}
-          disabled={character.locked}
-          onChange={(v) =>
-            onUpdateTransform(character.id, {
-              rotation: [character.transform.rotation[0], character.transform.rotation[1], degToRad(v)],
-            })
-          }
-        />
-      </section>
+      {/* TRANSFORM CARD */}
+      <details className="inspector-card">
+        <summary className="inspector-card-header">
+          <span className="inspector-card-title">Transform</span>
+        </summary>
+        <div className="inspector-card-content">
+          <div className="transform-group">
+            <p className="section-label">Position</p>
+            <div className="number-inputs-row">
+              <NumberInput
+                label="X"
+                value={character.transform.position[0]}
+                step={0.01}
+                disabled={character.locked}
+                onChange={(v) =>
+                  onUpdateTransform(character.id, {
+                    position: [v, character.transform.position[1], character.transform.position[2]],
+                  })
+                }
+              />
+              <NumberInput
+                label="Y"
+                value={character.transform.position[1]}
+                step={0.01}
+                disabled={character.locked}
+                onChange={(v) =>
+                  onUpdateTransform(character.id, {
+                    position: [character.transform.position[0], v, character.transform.position[2]],
+                  })
+                }
+              />
+              <NumberInput
+                label="Z"
+                value={character.transform.position[2]}
+                step={0.01}
+                disabled={character.locked}
+                onChange={(v) =>
+                  onUpdateTransform(character.id, {
+                    position: [character.transform.position[0], character.transform.position[1], v],
+                  })
+                }
+              />
+            </div>
+          </div>
 
-      <section>
-        <h3>STATUS</h3>
-        <p className="status">● {character.visible ? "Visible" : "Hidden"}</p>
-        <p className="status">● {character.locked ? "Locked" : "Unlocked"}</p>
-        <p className="status">● {isPoseMode ? "Pose Mode" : "Transform Mode"}</p>
-        <div className="inspector-actions">
+          <div className="transform-group">
+            <p className="section-label">Rotation</p>
+            <div className="number-inputs-row">
+              <NumberInput
+                label="X"
+                value={radToDeg(character.transform.rotation[0])}
+                step={0.1}
+                disabled={character.locked}
+                onChange={(v) =>
+                  onUpdateTransform(character.id, {
+                    rotation: [degToRad(v), character.transform.rotation[1], character.transform.rotation[2]],
+                  })
+                }
+              />
+              <NumberInput
+                label="Y"
+                value={radToDeg(character.transform.rotation[1])}
+                step={0.1}
+                disabled={character.locked}
+                onChange={(v) =>
+                  onUpdateTransform(character.id, {
+                    rotation: [character.transform.rotation[0], degToRad(v), character.transform.rotation[2]],
+                  })
+                }
+              />
+              <NumberInput
+                label="Z"
+                value={radToDeg(character.transform.rotation[2])}
+                step={0.1}
+                disabled={character.locked}
+                onChange={(v) =>
+                  onUpdateTransform(character.id, {
+                    rotation: [character.transform.rotation[0], character.transform.rotation[1], degToRad(v)],
+                  })
+                }
+              />
+            </div>
+          </div>
+
+          <div className="transform-group">
+            <p className="section-label">Scale</p>
+            <div className="number-inputs-row">
+              <NumberInput
+                label="X"
+                value={character.transform.scale[0]}
+                step={0.01}
+                disabled={character.locked}
+                onChange={(v) =>
+                  onUpdateTransform(character.id, {
+                    scale: [v, character.transform.scale[1], character.transform.scale[2]],
+                  })
+                }
+              />
+              <NumberInput
+                label="Y"
+                value={character.transform.scale[1]}
+                step={0.01}
+                disabled={character.locked}
+                onChange={(v) =>
+                  onUpdateTransform(character.id, {
+                    scale: [character.transform.scale[0], v, character.transform.scale[2]],
+                  })
+                }
+              />
+              <NumberInput
+                label="Z"
+                value={character.transform.scale[2]}
+                step={0.01}
+                disabled={character.locked}
+                onChange={(v) =>
+                  onUpdateTransform(character.id, {
+                    scale: [character.transform.scale[0], character.transform.scale[1], v],
+                  })
+                }
+              />
+            </div>
+          </div>
+
           <button
             className="inspector-btn"
-            onClick={() => onToggleVisibility(character.id)}
+            onClick={() => resetObjectTransform(character.id)}
           >
-            {character.visible ? "Hide" : "Show"}
-          </button>
-          <button
-            className="inspector-btn"
-            onClick={() => onToggleLock(character.id)}
-          >
-            {character.locked ? "Unlock" : "Lock"}
-          </button>
-          <button
-            className="inspector-btn"
-            onClick={() => onDuplicate(character.id)}
-          >
-            Duplicate
-          </button>
-          <button
-            className="inspector-btn danger"
-            onClick={() => onDelete(character.id)}
-          >
-            Delete
+            Reset Transform
           </button>
         </div>
-      </section>
+      </details>
 
-      <section>
-        <h3>POSE</h3>
-        {isPoseMode ? (
-          <p className="muted" style={{ fontSize: 11, lineHeight: 1.5 }}>
-            In Pose Mode, click a body part in the viewport to select a joint, then drag to rotate it.
-          </p>
-        ) : (
-          <p className="muted" style={{ fontSize: 11, lineHeight: 1.5 }}>
-            Switch to <b>Pose</b> tool mode to edit joints in the viewport by clicking and dragging body parts.
-          </p>
-        )}
-        <details style={{ marginTop: 8 }}>
-          <summary style={{ fontSize: 10, color: '#758085', cursor: 'pointer', userSelect: 'none' }}>
-            Fine-adjust sliders
+      {/* POSE CARD - only for mannequins */}
+      {isMannequin && (
+        <details className="inspector-card" open>
+          <summary className="inspector-card-header">
+            <span className="inspector-card-title">Pose</span>
           </summary>
-          <div style={{ marginTop: 6 }}>
-            <JointControls
-              values={jointValues ?? {}}
-              onChange={(config, dofIndex, value) => {
-                onJointChange?.(config.mannequinKey, dofIndex, value);
-              }}
-              disabled={character.locked}
-            />
+          <div className="inspector-card-content">
+            {!isPoseMode && (
+              <p className="pose-hint">
+                Switch to <b>Pose</b> tool mode to select joints in the viewport.
+              </p>
+            )}
+            <PosePanel character={character} />
           </div>
         </details>
-      </section>
-    </>
+      )}
+
+      {/* STATUS CARD */}
+      <details className="inspector-card">
+        <summary className="inspector-card-header">
+          <span className="inspector-card-title">Status</span>
+        </summary>
+        <div className="inspector-card-content">
+          <div className="status-list">
+            <p className="status-item">
+              <span className="status-dot" style={{ color: character.visible ? "#d6ff53" : "#ff6b6b" }}>&bull;</span>
+              {character.visible ? "Visible" : "Hidden"}
+            </p>
+            <p className="status-item">
+              <span className="status-dot" style={{ color: character.locked ? "#d6ff53" : "#ff6b6b" }}>&bull;</span>
+              {character.locked ? "Locked" : "Unlocked"}
+            </p>
+            <p className="status-item">
+              <span className="status-dot" style={{ color: isPoseMode ? "#d6ff53" : "#ff6b6b" }}>&bull;</span>
+              {isPoseMode ? "Pose Mode" : "Transform Mode"}
+            </p>
+          </div>
+          <div className="inspector-actions">
+            <button
+              className="inspector-btn"
+              onClick={() => onToggleVisibility(character.id)}
+            >
+              {character.visible ? "Hide" : "Show"}
+            </button>
+            <button
+              className="inspector-btn"
+              onClick={() => onToggleLock(character.id)}
+            >
+              {character.locked ? "Unlock" : "Lock"}
+            </button>
+            <button
+              className="inspector-btn"
+              onClick={() => onDuplicate(character.id)}
+            >
+              Duplicate
+            </button>
+            <button
+              className="inspector-btn danger"
+              onClick={() => onDelete(character.id)}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      </details>
+    </div>
   );
 }
 
@@ -226,4 +307,50 @@ function radToDeg(r: number): number {
 
 function degToRad(d: number): number {
   return (d * Math.PI) / 180;
+}
+
+const CAMERA_PRESETS: { label: string; view: EditorView }[] = [
+  { label: "Front", view: "front" },
+  { label: "Back", view: "back" },
+  { label: "Left", view: "left" },
+  { label: "Right", view: "right" },
+  { label: "Top", view: "top" },
+  { label: "Bottom", view: "bottom" },
+  { label: "Front Left", view: "front-left" },
+  { label: "Front Right", view: "front-right" },
+  { label: "Back Left", view: "back-left" },
+  { label: "Back Right", view: "back-right" },
+  { label: "Isometric", view: "isometric" },
+];
+
+function CameraAnglesPanel({
+  onSetCameraView,
+  onResetCamera,
+}: {
+  onSetCameraView?: (view: EditorView) => void;
+  onResetCamera?: () => void;
+}) {
+  if (!onSetCameraView || !onResetCamera) {
+    return <p className="muted" style={{ fontSize: 12, color: "#869094" }}>No camera control available</p>;
+  }
+
+  return (
+    <div className="camera-angles-grid">
+      {CAMERA_PRESETS.map((preset) => (
+        <button
+          key={preset.label}
+          className="camera-angle-btn"
+          onClick={() => onSetCameraView(preset.view)}
+        >
+          {preset.label}
+        </button>
+      ))}
+      <button
+        className="camera-angle-btn"
+        onClick={() => onResetCamera()}
+      >
+        Reset Camera
+      </button>
+    </div>
+  );
 }

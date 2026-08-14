@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "poses": {
+    "injured.side": {
+      "id": "injured.side",
+      "name": "Injured Side",
+      "category": "injured",
+      "file": "injured/side.json",
+      "description": "Lying on side, curled in pain"
+    }
+  },
+  "categories": [
+    "standing",
+    "sitting",
+    "walking",
+    "combat",
+    "injured",
+    "dead",
+    "sleeping",
+    "hero"
+  ]
+}
