@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "description": "Local MCP server that lets AI coding agents (Claude Code, Codex, etc.) drive a running Shot Composer tab.",
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "bin": {
     "shot-composer-mcp": "./server.js"
   },

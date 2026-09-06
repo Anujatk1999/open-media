@@ -44,9 +44,14 @@ This starts the MCP server on stdio (for your agent to talk to) and a WebSocket 
 
 The server speaks standard MCP over stdio, so any MCP-compatible client works. Point it at `node <repo>/mcp/server.js` with an absolute path.
 
-**Claude Code** (from the repo root):
+**Claude Code** (from the repo root, macOS/Linux/git-bash):
 ```bash
 claude mcp add shot-composer -- node "$(pwd)/mcp/server.js"
+```
+
+**Windows note**: `$(pwd)` is a bash-ism — it works in Git Bash/WSL, but not in PowerShell or `cmd.exe`. In those shells, just pass the absolute path directly instead:
+```powershell
+claude mcp add shot-composer -- node C:\path\to\open-media\mcp\server.js
 ```
 
 **Generic JSON config** (Claude Desktop, and other clients that read an `mcpServers` block — e.g. a project's `.mcp.json`):
@@ -61,7 +66,27 @@ claude mcp add shot-composer -- node "$(pwd)/mcp/server.js"
 }
 ```
 
-**Codex CLI / other clients**: use the same `command`/`args` pair in whatever config format that client expects (TOML for Codex's `config.toml`, etc.) — check that client's current MCP documentation for the exact file and key names, since this only depends on `command`/`args` being a plain `node server.js` invocation.
+**Cursor**: uses the same `mcpServers` JSON block above, in `.cursor/mcp.json` (project-local) or the global `~/.cursor/mcp.json` — copy the generic JSON config as-is into that file.
+
+**Codex CLI**: add an entry under `mcp_servers` in `~/.codex/config.toml` (or the project's `.codex/config.toml`):
+```toml
+[mcp_servers.shot-composer]
+command = "node"
+args = ["/absolute/path/to/open-media/mcp/server.js"]
+```
+Codex's config format has changed before and may again — if this doesn't work, check Codex's current MCP documentation for the exact table/key names, since this only depends on `command`/`args` being a plain `node server.js` invocation.
+
+**Other clients**: use the same `command`/`args` pair in whatever config format that client expects.
+
+## Verify the connection
+
+1. Start the main app: `npm run dev` (from the repo root), then open the composer page in a browser.
+2. Start the MCP server: `npm start` (from `mcp/`). Leave both running.
+3. From your connected agent, call the `get_scene` tool with no arguments.
+
+**Success**: the browser tab logs `[mcp-bridge] connected to local MCP server.` in its console, and `get_scene` returns JSON describing the current scene (an empty `objects` array if you haven't added anything yet, plus selection/playback state).
+
+**Failure**: if no tab is open yet, or the tab hasn't connected, every tool call returns `Error: No Shot Composer tab is connected. Open the app (npm run dev, then visit the composer) in a browser and try again.` — start/reload the composer tab and try again.
 
 ## Example agent prompts
 
@@ -151,6 +176,14 @@ Character posture is mannequin.js's own opaque, versioned format (`{ version, da
 - UI-only interactions with no underlying store action aren't exposed: composition-mode arrow-key nudging, live gizmo dragging, mirroring a pose across the body, and "Part Scale" mode.
 - Video export (`exportVideo` on `ComposerViewportAPI`) isn't wrapped as a tool yet — capture is still image-only. Adding it would follow the exact same pattern as `capture_shot`.
 - `capture_shot` renders through the live, on-screen camera (whatever is currently framed), not an offscreen/headless render.
+
+## Troubleshooting
+
+**`Error: listen EADDRINUSE: address already in use :::39217`** — something is already bound to port 39217, almost always a previous `mcp/server.js` process that didn't exit cleanly. Find and stop it (e.g. `lsof -i :39217` on macOS/Linux, `netstat -ano | findstr 39217` on Windows, then stop that process), then run `npm start` again. Only one MCP server instance can run at a time.
+
+**`No Shot Composer tab is connected.`** — the MCP server is running but no browser tab has connected to it yet. Make sure `npm run dev` is running and the composer page is open in a browser tab; check that tab's console for the `[mcp-bridge]` connect/retry log lines.
+
+**Tool calls hang or fail after refreshing/reopening the composer tab** — reloading a page always reconnects (the bridge retries every 2 seconds), but if you closed the old tab and opened a new one, or opened a second tab, only the most recently connected tab is bridged — an old tab's connection is simply replaced, it isn't an error. If calls still hang, confirm the tab you're testing in is the one that logged `[mcp-bridge] connected`, and that `mcp/server.js` itself hasn't crashed (check its terminal output).
 
 ## Extending this
 
