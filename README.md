@@ -6,6 +6,8 @@ Everything runs locally in the browser. There is no backend, no account, and no 
 
 **Repository**: https://github.com/Anujatk1999/open-media
 
+![Viewport with a mannequin and Select/Move/Rotate/Scale/Pose toolbar](public/help/viewport.png)
+
 ## What is Shot Composer?
 
 - Add characters and objects
