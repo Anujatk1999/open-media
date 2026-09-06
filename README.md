@@ -1,53 +1,92 @@
 # Shot Composer
 
-A browser-based 3D shot composer for previsualization. Block out a scene with posable human figures and primitive shapes, frame it with a camera, and export the frame as a PNG reference — useful for storyboarding, shot planning, and generating pose/composition references for AI image and video tools.
+A free, browser-based 3D shot composer for previsualizing cinematic shots before generating AI video or images. Instead of describing camera position, framing, and character pose entirely in a text prompt, block the shot out visually first — pose characters, frame the camera, add movement — then use that visual direction as a reference for your AI video/image prompt.
 
-Everything runs locally in the browser. There is no backend, no account, and no data leaves your machine.
+Everything runs locally in the browser. There is no backend, no account, and no data leaves your machine — saved poses, scenes, and motions are kept in your browser's `localStorage`.
 
 **Repository**: https://github.com/Anujatk1999/open-media
 
-## Features
+## What is Shot Composer?
 
-### Scene building
-- Add articulated human figures — **male**, **female**, and **child** (powered by [mannequin.js](https://github.com/boytchev/mannequin.js))
-- Add primitives — **cube, plane, cylinder, sphere, capsule, cone, torus**
-- Scene tree sidebar to select, rename, duplicate, and delete objects
-- Undo for scene changes (50 steps, in-memory)
+- Add characters and objects
+- Pose characters, or apply a saved pose
+- Choose a shot size and camera angle, including Over-the-Shoulder (OTS)
+- Adjust camera elevation and composition
+- Add and animate cameras with keyframes for shots that move
+- Capture a static frame, or preview a motion shot
+- Save and reuse scenes, poses, and motions from the Shot Library
 
-### Transform tools
-- **Move**, **Rotate**, and **Scale** via viewport gizmos or numeric fields in the Inspector
-- Each gizmo drag is recorded as a single undo step
+## Static vs Motion
 
-### Posing
-- **Pose** tool: click any body part in the viewport to select that joint
-- Rotation-ring gizmo in the viewport for direct joint dragging
-- Numeric sliders and inputs in the Inspector for every joint's degrees of freedom, using mannequin.js's named angles (`raise`, `straddle`, `bend`, `tilt`, `turn`) plus finger chains
-- **Mirroring** — copy an entire limb chain, or a single joint, to the opposite side
-- **Reset Pose** restores the figure's default posture; **Ground** re-plants the feet on the floor plane
-- **Part Scale** mode resizes an individual body part (session-only — not stored in saved poses)
+Shot Composer has one unified composer with two modes, switchable at any time from the top bar without losing your scene:
 
-### Pose library
-- Bundled poses loaded from `public/poses/` (standing, sitting, walking, combat, injured, dead, sleeping, hero)
-- Save your own poses, update existing ones, and delete custom entries
-- Custom poses persist in `localStorage` per browser
+- **Static** — compose a single cinematic frame: Character → Pose → Camera → Shot Size → Angle → Elevation → Composition → Capture.
+- **Motion** — add keyframes to animate characters, objects, and cameras over time, then preview and export: Build the shot → Switch to Motion → Add keyframes → Preview → Export.
 
-### Motion preview
-- Built-in **Walk**, **Run**, **Kick**, and **Idle** cycles play on the selected figure
-- Preview only — stopping playback restores the posture from before you pressed play
+## Interface
 
-### Camera and framing
-- Orbit, pan, and dolly navigation
-- 11 camera presets: Front, Back, Left, Right, Top, Bottom, Front Left, Front Right, Back Left, Back Right, Isometric
-- **Frame Selected**, **Reset View**, and zoom controls
-- **Composition mode** for arrow-key camera pedestal/truck adjustments
-- Grid toggle
+- **Scene panel** (left) — add Male/Female/Child characters, Cube/Plane/Cylinder/Sphere/Capsule/Cone/Torus primitives, and (in Motion mode) cameras. Select, rename, duplicate, and delete objects.
+- **Viewport** (center) — select, move, rotate, scale, and pose objects; position cameras; preview the scene.
+- **Inspector** (right) — contextual tabs for Shot, Object, Motion, Camera, Pose, and Composition. Collapsible for more viewport space.
+- **Bottom strip** — the Shot Strip in Static mode (captured shot), or the Timeline in Motion mode (play/pause, stop, scrub, speed, duration, keyframes).
 
-### Export
-- **Capture Shot** saves the current viewport as a timestamped PNG
+## Camera and framing
 
-### Responsive layout
-- Desktop: scene tree on the left, viewport in the center, Inspector on the right
-- Below 768px: full-screen panels with a bottom tab bar and a compact tool/zoom toolbar
+- **Shot Size** — Wide, Full, Medium, MCU (Medium Close-Up), Close-Up
+- **Camera Angle** — Front, 3/4 Left, 3/4 Right, Profile, Back, Over the Shoulder
+- **Over-the-Shoulder (OTS)** — a real spatial camera relationship: the camera sits behind and slightly to one side of the selected character, near shoulder/head height, looking past them toward another character or the scene
+- **Elevation** — Eye Level, High, Low
+- **Composition** — Center, Left Third, Right Third, Upper Third, Lower Third, Negative Space
+- Orbit/pan/dolly viewport navigation, grid toggle, and a Composition mode for arrow-key camera pedestal/truck adjustments
+
+## Posing
+
+- Click any body part in the viewport to select that joint, or drag its rotation-ring gizmo
+- Numeric sliders and inputs in the Inspector for every joint's degrees of freedom (mannequin.js's `raise`, `straddle`, `bend`, `tilt`, `turn`), including finger chains
+- Apply a pose from the bundled Pose Library, or save/update/delete your own poses
+- Reset Pose restores the figure's default posture
+
+## Motion and keyframes
+
+- Add cameras and animate character, object, and camera transforms (including rotation) with keyframes
+- Timeline controls: play/pause, stop, scrub, speed, and duration
+- Save a motion (keyframe track) for reuse from the Motion Library
+
+## Saving your work
+
+| Action | What it saves |
+| --- | --- |
+| **Save Scene** | The complete editable scene, to continue editing later |
+| **Save Pose** | A reusable character pose |
+| **Save Motion** | Motion/keyframe data, to reuse on another shot |
+
+## Shot Library
+
+A separate browsable gallery (`/library.html`) of shot configurations and reusable setups, organized by **Composition**, **Camera Angle**, **Pose Library**, **Motion Library**, and **Community** (community scenes are a coming-soon placeholder). Opens the live 3D composer in a new tab to preview or apply an entry — a starting point for shots you don't want to build from scratch.
+
+## Help Center
+
+An in-app documentation hub (`/help.html`) covering the full workflow, camera/OTS guidance, motion and keyframes, saving, the Shot Library, keyboard shortcuts, and an AI video prompt-writing guide. Open it any time from the ⓘ button in the composer, in both Static and Motion modes — it opens in a new tab.
+
+## Keyboard shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `M` / `R` / `S` / `P` | Move / Rotate / Scale / Pose tool |
+| `Ctrl`/`Cmd` + `Z` | Undo |
+| `Ctrl`/`Cmd` + `Shift` + `Z`, or `Ctrl`/`Cmd` + `Y` | Redo |
+| `Ctrl`/`Cmd` + `D` | Duplicate |
+| `Delete` / `Backspace` | Delete |
+| `Escape` | Clear selection |
+| `Space` | Play / Pause (Motion mode) |
+| `Arrow Keys` | Move playhead by one frame (Motion mode) |
+| `Shift` + `Arrow Keys` | Move playhead by one second (Motion mode) |
+
+Shortcuts are ignored while a text field is focused.
+
+## Export
+
+**Capture Shot** saves the current Static-mode viewport as a timestamped PNG reference for your AI prompt.
 
 ## Getting started
 
@@ -60,7 +99,7 @@ npm install
 npm run dev
 ```
 
-The dev server prints a local URL (typically `http://localhost:5173`). Open it and click through to the composer at `/composer`.
+The dev server prints a local URL (typically `http://localhost:5173`). Open it, then follow through to the Shot Library and composer.
 
 ## Scripts
 
@@ -69,56 +108,49 @@ The dev server prints a local URL (typically `http://localhost:5173`). Open it a
 | `npm run dev` | Start the Vite dev server with hot reload |
 | `npm run build` | Type check (`tsc --noEmit`) and build to `dist/` |
 
-## Controls
-
-| Input | Action |
-| --- | --- |
-| Left drag | Orbit camera |
-| Right drag | Pan camera |
-| Wheel | Dolly / zoom |
-| `M` / `R` / `S` / `P` | Move / Rotate / Scale / Pose tool |
-| `C` | Toggle composition mode |
-| Click body part (Pose tool) | Select a joint |
-
-Shortcuts are ignored while a text field is focused or a modifier key is held.
-
 ## Project structure
 
 ```
 public/
-└── poses/                     # Bundled pose library (JSON)
+├── poses/                          # Bundled pose library (JSON)
+└── help/                           # Help Center screenshots
 
 src/
-├── main.tsx                   # Entry point
-├── ComposerShell.tsx          # Desktop / mobile layout shell
+├── main.tsx                        # Landing/composer entry (index.html)
+├── library-main.tsx                # Shot Library entry (library.html)
+├── help-main.tsx                   # Help Center entry (help.html)
+├── ComposerShell.tsx                # Static/Motion composer layout, mode toggle, shortcuts
 ├── app/
-│   ├── App.tsx                # Routes: / (landing) and /composer
+│   ├── App.tsx                     # Routes: / (landing) and /composer
 │   └── app.css
 ├── modules/composer/
-│   ├── ComposerViewport.tsx   # R3F canvas, keyboard shortcuts, capture
-│   ├── WorkspaceToolbar.tsx   # Tools, camera presets, grid, capture
-│   ├── SceneTree.tsx          # Object list and add/remove controls
-│   ├── Inspector.tsx          # Transform fields and camera presets
-│   ├── PosePanel.tsx          # Pose library, mirroring, motion buttons
-│   ├── JointControls.tsx      # Per-joint numeric sliders
-│   ├── JointGizmo.tsx         # Viewport joint rotation rings
-│   ├── TransformGizmo.tsx     # Move / rotate / scale gizmos
-│   ├── PoseControls.tsx       # Joint picking via raycast
-│   ├── MotionPlayer.tsx       # Walk / run / kick / idle playback
-│   ├── MannequinObject.tsx    # mannequin.js figure wrapper
-│   ├── PrimitiveObject.tsx    # Primitive mesh wrapper
+│   ├── ComposerViewport.tsx        # R3F canvas, tools, capture
+│   ├── WorkspaceToolbar.tsx        # Tool switching, grid, capture
+│   ├── SceneTree.tsx               # Scene panel: characters, primitives, cameras
+│   ├── Inspector.tsx               # Shot/Object/Motion/Camera/Pose/Composition tabs
+│   ├── ShotBuilderPanel.tsx        # Shot size, camera angle, elevation, composition
+│   ├── ShotPreview.tsx             # Shot Strip (Static mode)
+│   ├── PosePanel.tsx / PoseControls.tsx / JointControls.tsx / JointGizmo.tsx
+│   ├── TransformGizmo.tsx          # Move / rotate / scale gizmos
+│   ├── MannequinObject.tsx         # mannequin.js figure wrapper
+│   ├── PrimitiveObject.tsx         # Primitive mesh wrapper
 │   ├── CompositionControls.tsx
-│   ├── cameraUtils.ts         # Framing and view presets
-│   └── helpers/
-│       ├── jointConfig.ts     # Joint definitions and DOF ranges
-│       ├── mannequinFactory.ts
-│       ├── mirror.ts          # Limb / joint mirroring
-│       ├── motion.ts          # Motion cycle definitions
-│       ├── poseLibrary.ts     # Bundled + custom pose loading
-│       ├── posture.ts         # Posture serialization
-│       └── gizmoArrowheads.ts
+│   ├── cameraUtils.ts              # Framing and view presets
+│   └── helpers/                    # Joint config, mirroring, pose (de)serialization
+├── modules/motion/
+│   ├── Timeline.tsx                # Playback, scrubbing, duration, speed, keyframes
+│   ├── CameraObject.tsx / CameraViewfinder.tsx / CameraInspectorPanel.tsx
+│   ├── PoseLibraryPanel.tsx
+│   ├── motionPresets.ts
+│   └── helpers/                    # Keyframe sampling, motion/scene library persistence
+├── modules/library/
+│   ├── LibraryPage.tsx             # Shell for library.html
+│   ├── calibration/                # Shot Library UI, thumbnails, shot solving
+│   └── model/                      # Unified LibraryEntry model across all sources
+├── modules/help/
+│   └── HelpPage.tsx                # Help Center content
 ├── stores/
-│   └── composerStore.ts       # Zustand scene state and undo history
+│   └── composerStore.ts            # Zustand scene state and undo history (50 steps)
 └── types/
     └── mannequin-js.d.ts
 ```
@@ -137,11 +169,15 @@ src/
 
 ## Data and persistence
 
-Scene contents live in memory and are cleared on reload — there is currently no scene save/load or import/export. Only custom poses persist, in browser `localStorage`.
+Scene contents live in memory and are cleared on reload unless saved. Saved scenes, poses, and motions persist in browser `localStorage`, per browser, with no server involved.
 
 ## Deployment
 
 `npm run build` emits a fully static site to `dist/`, deployable to any static host. Configure your host to serve it as a single-page application so that client-side routes such as `/composer` fall back to `index.html`.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for how to report vulnerabilities.
 
 ## Contributing
 

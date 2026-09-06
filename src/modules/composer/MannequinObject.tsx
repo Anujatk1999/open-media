@@ -1,7 +1,6 @@
 import { useLayoutEffect, useRef, useImperativeHandle, forwardRef } from "react";
 import * as THREE from "three";
 import type { ThreeEvent } from "@react-three/fiber";
-import { useComposerStore } from "../../stores/composerStore";
 
 import {
   createMannequin,
@@ -16,9 +15,13 @@ interface Props {
   name?: string;
   position: [number, number, number];
   rotation: [number, number, number];
+  scale?: [number, number, number];
   posture?: Posture;
   visible?: boolean;
   selected?: boolean;
+  registerInstance: (id: string, object: THREE.Object3D) => void;
+  unregisterInstance: (id: string) => void;
+  onDefaultPosture: (id: string, posture: Posture) => void;
   onReady?: (object: THREE.Object3D) => void;
   onSelect?: (id: string) => void;
 }
@@ -36,9 +39,13 @@ const MannequinObject = forwardRef<MannequinHandle, Props>(function MannequinObj
     type = "male",
     position,
     rotation,
+    scale = [1, 1, 1],
     posture,
     visible = true,
     selected = false,
+    registerInstance,
+    unregisterInstance,
+    onDefaultPosture,
     onReady,
     onSelect,
   }: Props,
@@ -46,8 +53,11 @@ const MannequinObject = forwardRef<MannequinHandle, Props>(function MannequinObj
 ) {
   const root = useRef(new THREE.Group());
   const mannequinRef = useRef<THREE.Object3D | null>(null);
-  const registerInstance = useComposerStore(s => s.registerObjectInstance);
-  const unregisterInstance = useComposerStore(s => s.unregisterObjectInstance);
+  // `posture` is only used as a fallback when Undo/Redo re-creates the figure
+  // mid-build (see below) — a ref keeps that read live without pulling the
+  // store in here directly.
+  const postureRef = useRef<Posture | undefined>(posture);
+  postureRef.current = posture;
 
   useImperativeHandle(ref, () => ({
     root: root.current,
@@ -60,7 +70,6 @@ const MannequinObject = forwardRef<MannequinHandle, Props>(function MannequinObj
   // carries.
   useLayoutEffect(() => {
     let mounted = true;
-    const updateDefaultPosture = useComposerStore.getState().updateObjectDefaultPosture;
     createMannequin({ type }).then(mannequin => {
       if (!mounted) return;
       root.current.clear();
@@ -71,12 +80,12 @@ const MannequinObject = forwardRef<MannequinHandle, Props>(function MannequinObj
 
       // Capture the default posture after mannequin is fully initialized
       // The mannequin-js constructor sets up the default pose with non-zero values
-      updateDefaultPosture(id, readPosture(mannequin));
+      onDefaultPosture(id, readPosture(mannequin));
 
       // A figure re-created by Undo must come back in its stored pose. The
       // posture effect below cannot do it: it already ran, before this async
       // build produced a figure to write to, and its dep has not changed since.
-      const stored = useComposerStore.getState().objects.find(o => o.id === id)?.posture;
+      const stored = postureRef.current;
       if (stored) writePosture(mannequin, stored);
     });
     return () => {
@@ -88,7 +97,7 @@ const MannequinObject = forwardRef<MannequinHandle, Props>(function MannequinObj
     };
   }, [type, id, onReady, registerInstance, unregisterInstance]);
 
-  // Apply transform — only if the position actually differs from current.
+  // Apply transform — only if the value actually differs from current.
   // This prevents fighting with TransformControls during gizmo drag.
   useLayoutEffect(() => {
     const p = root.current.position;
@@ -99,7 +108,11 @@ const MannequinObject = forwardRef<MannequinHandle, Props>(function MannequinObj
     if (r.x !== rotation[0] || r.y !== rotation[1] || r.z !== rotation[2]) {
       r.set(rotation[0], rotation[1], rotation[2]);
     }
-  }, [position, rotation]);
+    const s = root.current.scale;
+    if (s.x !== scale[0] || s.y !== scale[1] || s.z !== scale[2]) {
+      s.set(scale[0], scale[1], scale[2]);
+    }
+  }, [position, rotation, scale]);
 
   // Apply posture — never re-ground here. Grounding moves the whole rig, so
   // doing it per posture write would fight a live gizmo drag. The actions that
@@ -124,7 +137,6 @@ const MannequinObject = forwardRef<MannequinHandle, Props>(function MannequinObj
       visible={visible}
       onClick={(e: ThreeEvent<MouseEvent>) => {
         e.stopPropagation();
-        console.log("[MannequinObject] body clicked, id:", id, "type:", type);
         onSelect?.(id);
       }}
     />

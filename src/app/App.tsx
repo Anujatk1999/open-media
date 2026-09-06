@@ -1,5 +1,5 @@
 import { Suspense, lazy, useState } from 'react';
-import { Routes, Route, Link } from 'react-router-dom';
+import { Routes, Route } from 'react-router-dom';
 
 const ComposerShell = lazy(() => import('../ComposerShell'));
 
@@ -34,9 +34,9 @@ function LandingPage() {
             <h2>3D Shot Composer</h2>
           </div>
           <p className="landing-card-desc">Create and compose cinematic shots using 3D characters and objects.</p>
-          <Link to="/composer" className="landing-btn landing-btn-primary">
+          <a href="/library.html" className="landing-btn landing-btn-primary">
             Open Composer
-          </Link>
+          </a>
         </article>
         <article className="landing-card landing-card-disabled">
           <div className="landing-card-header">

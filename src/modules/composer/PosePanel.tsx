@@ -3,7 +3,6 @@ import { useComposerStore, type SceneObject } from "../../stores/composerStore";
 import JointControls from "./JointControls";
 import { JOINT_CONFIGS, getDOF, setDOF } from "./helpers/jointConfig";
 import { mirrorJoint, sideOf } from "./helpers/mirror";
-import { MOTIONS } from "./helpers/motion";
 import {
   deleteCustomPose,
   loadPoseLibrary,
@@ -15,8 +14,8 @@ import { readPosture } from "./helpers/posture";
 import "./PosePanel.css";
 
 /**
- * The mannequin pose editor: library, motions, the selected joint's angles,
- * mirroring and per-part scale.
+ * The mannequin pose editor: library, the selected joint's angles, mirroring
+ * and per-part scale.
  *
  * Joint values are read straight off the live figure rather than from a cached
  * map, because the gizmo in the viewport edits the same joints — a cache would
@@ -26,10 +25,8 @@ import "./PosePanel.css";
 export default function PosePanel({ character }: { character: SceneObject }) {
   const selectedJointKey = useComposerStore((s) => s.selectedJointKey);
   const partScaleMode = useComposerStore((s) => s.partScaleMode);
-  const activeMotion = useComposerStore((s) => s.activeMotion);
   const objectInstances = useComposerStore((s) => s.objectInstances);
   const setPartScaleMode = useComposerStore((s) => s.setPartScaleMode);
-  const setActiveMotion = useComposerStore((s) => s.setActiveMotion);
   const updatePosture = useComposerStore((s) => s.updateObjectPosture);
   const applyPosture = useComposerStore((s) => s.applyPosture);
   const groundObject = useComposerStore((s) => s.groundObject);
@@ -83,16 +80,32 @@ export default function PosePanel({ character }: { character: SceneObject }) {
       <section className="pose-section">
         <p className="section-label">Pose Library</p>
         <div className="pose-library">
+          <div className="pose-entry">
+            <button
+              className={`pose-preset-btn${appliedPoseId === null ? " active" : ""}`}
+              disabled={locked}
+              onClick={() => {
+                setAppliedPoseId(null);
+                setPoseName("");
+              }}
+            >
+              None
+            </button>
+          </div>
           {library.map((pose) => (
             <div className="pose-entry" key={pose.id}>
               <button
                 className={`pose-preset-btn${appliedPoseId === pose.id ? " active" : ""}`}
                 disabled={locked}
                 onClick={() => {
-                  setActiveMotion(null);
-                  applyPosture(character.id, pose.posture);
-                  setAppliedPoseId(pose.id);
-                  setPoseName(pose.name);
+                  if (appliedPoseId === pose.id) {
+                    setAppliedPoseId(null);
+                    setPoseName("");
+                  } else {
+                    applyPosture(character.id, pose.posture);
+                    setAppliedPoseId(pose.id);
+                    setPoseName(pose.name);
+                  }
                 }}
               >
                 {pose.name}
@@ -158,25 +171,6 @@ export default function PosePanel({ character }: { character: SceneObject }) {
       </section>
 
       <section className="pose-section">
-        <p className="section-label">Motion</p>
-        <div className="pose-button-grid">
-          {Object.entries(MOTIONS).map(([key, motion]) => (
-            <button
-              key={key}
-              className={`inspector-btn${activeMotion === key ? " on" : ""}`}
-              disabled={locked}
-              onClick={() => setActiveMotion(activeMotion === key ? null : key)}
-            >
-              {motion.label}
-            </button>
-          ))}
-        </div>
-        <p className="pose-hint">
-          Playback is a preview — stopping restores the pose the figure had.
-        </p>
-      </section>
-
-      <section className="pose-section">
         <div className="pose-button-grid">
           <button className="inspector-btn" onClick={() => groundObject(character.id)}>
             Ground
@@ -229,10 +223,7 @@ export default function PosePanel({ character }: { character: SceneObject }) {
 
           <button
             className={`inspector-btn${partScaleMode ? " on" : ""}`}
-            onClick={() => {
-              if (!partScaleMode) setActiveMotion(null);
-              setPartScaleMode(!partScaleMode);
-            }}
+            onClick={() => setPartScaleMode(!partScaleMode)}
           >
             {partScaleMode ? "Scaling Part" : "Scale Part"}
           </button>

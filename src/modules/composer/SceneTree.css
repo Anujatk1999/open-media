@@ -1,59 +1,90 @@
 .scene-tree {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   margin-top: 4px;
 }
 
-.scene-tree-header {
+.scene-section {
+  background: var(--panel-strong);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.scene-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.scene-section-header::-webkit-details-marker {
+  display: none;
+}
+
+.scene-section-header::before {
+  content: "▶";
+  font-size: 9px;
+  color: var(--text-faint);
+  transition: transform 0.15s;
+}
+
+.scene-section[open] .scene-section-header::before {
+  transform: rotate(90deg);
+}
+
+.scene-section-header:hover {
+  color: var(--text);
+}
+
+.scene-section-body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.scene-tree-header h3 {
-  font-size: 11px;
-  letter-spacing: 1.4px;
-  color: #8d999d;
-  margin: 0;
+  padding: 0 12px 12px;
 }
 
 .scene-add-buttons {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .scene-add-buttons button {
-  padding: 6px 4px;
-  border: 1px solid #30363a;
-  border-radius: 4px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   font-size: 11px;
-  color: #c4cbcc;
-  background: #1b2024;
+  color: var(--text-dim);
+  background: var(--panel);
 }
 
 .scene-add-buttons button:hover {
   background: #30383a;
-  color: #d6ff53;
+  color: var(--accent);
 }
 
 .scene-character-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: calc(100vh - 180px);
-  overflow-y: auto;
-  overflow-x: hidden;
 }
 
 .scene-empty {
   padding: 16px 8px;
   font-size: 12px;
-  color: #758085;
+  color: var(--text-faint);
   text-align: center;
-  border: 1px dashed #2c3337;
-  border-radius: 4px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
 }
 
 .scene-item {
@@ -62,7 +93,7 @@
   flex-direction: column;
   gap: 4px;
   padding: 8px 10px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   text-align: left;
   color: #cbd1d1;
   background: transparent;
@@ -75,7 +106,7 @@
 
 .scene-item.selected {
   background: #30383a;
-  box-shadow: inset 2px 0 #d6ff53;
+  box-shadow: inset 2px 0 var(--accent);
   border-color: #3a4246;
 }
 
@@ -98,12 +129,12 @@
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.8px;
-  color: #758085;
+  color: var(--text-faint);
 }
 
 .scene-item-locked,
 .scene-item-hidden {
-  color: #758085;
+  color: var(--text-faint);
 }
 
 .scene-item-actions {
@@ -117,8 +148,8 @@
 .scene-item-actions button {
   padding: 2px 4px;
   font-size: 9px;
-  color: #8a9599;
-  border: 1px solid #2c3337;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
   border-radius: 3px;
   background: transparent;
   white-space: nowrap;
@@ -128,7 +159,7 @@
 
 .scene-item-actions button:hover {
   background: #384144;
-  color: #d6ff53;
+  color: var(--accent);
 }
 
 .scene-item-actions button.danger:hover {

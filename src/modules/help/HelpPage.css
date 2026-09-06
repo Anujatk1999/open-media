@@ -1,0 +1,446 @@
+/* Help Center — a dedicated documentation page, not another editor screen.
+   Reuses the app's dark theme tokens (see app/app.css :root) but with its own
+   generous, article-style layout instead of the composer's dense panels. */
+
+/* app.css pins html/body/#root to height:100%/overflow:hidden for the composer's
+   fixed 3D viewport. Overriding via the html.help-doc-root class (added while
+   HelpPage is mounted) so this wins regardless of CSS import order, and restores
+   normal document-level scrolling for this page only. */
+html.help-doc-root,
+html.help-doc-root body,
+html.help-doc-root #root {
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+}
+
+.help-page {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ---------- Top bar ---------- */
+.help-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 24px;
+  background: rgba(11, 13, 15, 0.92);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+.help-topbar-title {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+.help-topbar-title .dim { color: var(--text-dim); font-weight: 500; }
+.help-topbar-links {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-left: auto;
+}
+.help-topbar-link {
+  font-size: 13px;
+  color: var(--text-dim);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color .15s;
+}
+.help-topbar-link:hover { color: var(--text); }
+.help-topbar-cta {
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  color: #15191d;
+  background: var(--accent);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background .15s, transform .15s;
+}
+.help-topbar-cta:hover { background: #c4ff42; transform: translateY(-1px); }
+
+/* ---------- Hero ---------- */
+.help-hero {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 48px 24px 8px;
+}
+.help-hero-eyebrow {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: rgba(214, 255, 83, .1);
+  padding: 5px 10px;
+  border-radius: 999px;
+  margin-bottom: 16px;
+}
+.help-hero h1 {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 12px;
+  max-width: 720px;
+}
+.help-hero p {
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--text-dim);
+  max-width: 640px;
+  margin: 0;
+}
+
+/* ---------- Body layout: sidebar TOC + article ---------- */
+.help-body {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 32px 24px 96px;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 40px;
+  align-items: start;
+}
+
+.help-toc {
+  position: sticky;
+  top: 68px;
+  max-height: calc(100vh - 88px);
+  overflow-y: auto;
+  padding-right: 8px;
+}
+.help-toc-group { margin-bottom: 22px; }
+.help-toc-group-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 0 0 8px;
+  padding: 0 10px;
+}
+.help-toc-link {
+  display: block;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text-dim);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+  line-height: 1.4;
+  transition: background .15s, color .15s;
+}
+.help-toc-link:hover { color: var(--text); background: var(--panel-strong); }
+.help-toc-link .num { color: var(--text-faint); margin-right: 6px; font-variant-numeric: tabular-nums; }
+
+.help-article { min-width: 0; }
+
+/* ---------- Sections ---------- */
+.help-section {
+  scroll-margin-top: 84px;
+  padding-bottom: 44px;
+  margin-bottom: 44px;
+  border-bottom: 1px solid var(--border);
+}
+.help-section:last-child { border-bottom: none; }
+
+.help-section-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.help-section-num {
+  font-size: 12px;
+  font-weight: 700;
+  color: #15191d;
+  background: var(--accent);
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.help-section h2 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0 0 14px;
+}
+.help-section h3 {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: .2px;
+  color: var(--text);
+  margin: 24px 0 8px;
+}
+.help-section h3:first-of-type { margin-top: 4px; }
+.help-section p {
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: #c4cbcc;
+  margin: 0 0 14px;
+}
+.help-section ul, .help-section ol {
+  margin: 0 0 14px;
+  padding-left: 20px;
+}
+.help-section li {
+  font-size: 14px;
+  line-height: 1.65;
+  color: #c4cbcc;
+  margin-bottom: 5px;
+}
+.help-section strong { color: var(--text); font-weight: 600; }
+
+/* ---------- Callouts ---------- */
+.help-callout {
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  margin: 4px 0 18px;
+  background: rgba(214, 255, 83, .06);
+  border: 1px solid rgba(214, 255, 83, .25);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md);
+}
+.help-callout-icon { font-size: 15px; line-height: 1.4; }
+.help-callout p { margin: 0; font-size: 13.5px; color: #d4ddd9; }
+.help-callout p + p { margin-top: 8px; }
+
+.help-callout.blue {
+  background: rgba(37, 99, 235, .08);
+  border-color: rgba(37, 99, 235, .3);
+  border-left-color: var(--accent-blue);
+}
+
+/* ---------- Cards / grids ---------- */
+.help-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.help-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+}
+.help-card h4 {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  margin: 0 0 6px;
+}
+.help-card p {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 0;
+  line-height: 1.55;
+}
+
+/* ---------- Step list (numbered workflow) ---------- */
+.help-steps {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  counter-reset: help-step;
+}
+.help-steps li {
+  counter-increment: help-step;
+  position: relative;
+  padding: 4px 0 4px 34px;
+  font-size: 14px;
+  color: #c4cbcc;
+  margin-bottom: 8px;
+}
+.help-steps li::before {
+  content: counter(help-step);
+  position: absolute;
+  left: 0;
+  top: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--panel-strong);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------- Flow strip (Subject → Pose → Camera …) ---------- */
+.help-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 18px;
+}
+.help-flow-step {
+  padding: 7px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #c4cbcc;
+  background: var(--panel-strong);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+.help-flow-arrow { color: var(--text-faint); font-size: 13px; }
+
+/* ---------- Prompt / code blocks ---------- */
+.help-code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.65;
+  color: #d8dedd;
+  background: #0f1215;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  margin: 0 0 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.help-prompt-example {
+  margin-bottom: 18px;
+}
+.help-prompt-example-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .6px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 0 0 6px;
+}
+
+/* ---------- Table ---------- */
+.help-table-wrap { overflow-x: auto; margin-bottom: 18px; }
+.help-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+.help-table th, .help-table td {
+  text-align: left;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.help-table th {
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: .6px;
+  text-transform: uppercase;
+  font-weight: 700;
+  background: var(--panel-strong);
+}
+.help-table td { color: #c4cbcc; }
+.help-table kbd {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel-strong);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 2px 7px;
+}
+
+/* ---------- Figures / screenshots ---------- */
+.help-figure-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin: 4px 0 20px;
+}
+.help-figure {
+  margin: 0 0 20px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.help-figure-row .help-figure { margin-bottom: 0; }
+.help-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #0c0e10;
+  object-fit: contain;
+}
+.help-figure figcaption {
+  padding: 9px 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+}
+.help-figure-placeholder {
+  aspect-ratio: 16 / 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-faint);
+  font-size: 12px;
+  background: repeating-linear-gradient(135deg, #14181c, #14181c 10px, #171b1f 10px, #171b1f 20px);
+}
+.help-figure-placeholder .icon { font-size: 22px; }
+
+/* ---------- Formula strip (Angle vs Composition vs Size vs Elevation) ---------- */
+.help-formula {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.help-formula div { font-size: 13px; color: #c4cbcc; }
+.help-formula strong { color: var(--accent); }
+
+/* ---------- Responsive ---------- */
+@media (max-width: 900px) {
+  .help-body {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .help-toc {
+    position: static;
+    max-height: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 4px;
+    padding: 0 0 4px;
+  }
+  .help-toc-group { margin-bottom: 0; display: contents; }
+  .help-toc-group-label { display: none; }
+  .help-toc-link {
+    padding: 6px 10px;
+    background: var(--panel-strong);
+    border: 1px solid var(--border);
+  }
+  .help-topbar-links { gap: 10px; }
+}
+
+@media (max-width: 560px) {
+  .help-hero h1 { font-size: 26px; }
+  .help-topbar-title span.dim { display: none; }
+}

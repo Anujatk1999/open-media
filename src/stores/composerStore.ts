@@ -8,8 +8,10 @@ import {
   type Posture,
 } from "../modules/composer/helpers/posture";
 import { groundFigure } from "../modules/composer/helpers/mannequinFactory";
+import { sampleTrack } from "../modules/motion/helpers/sampleTrack";
+import { yawPitchTowards, eulerFromYawPitch } from "../modules/motion/helpers/cameraFree";
 
-export type ComposerTool = "move" | "rotate" | "scale" | "pose";
+export type ComposerTool = "select" | "move" | "rotate" | "scale" | "pose";
 
 export type CharacterType =
   | "male"
@@ -25,12 +27,28 @@ export type PrimitiveType =
   | "cone"
   | "torus";
 
-export type ObjectType = CharacterType | PrimitiveType;
+/** A cinematic camera is a scene object like any other, always present in the one shared store — the Motion-mode UI is what gates its creation/rendering, not the data model. */
+export type ObjectType = CharacterType | PrimitiveType | "camera";
 
 export interface SceneTransform {
   position: [number, number, number];
   rotation: [number, number, number];
   scale: [number, number, number];
+}
+
+export interface Keyframe {
+  id: string;
+  time: number;
+  /**
+   * For a camera, this IS the camera's full state (position + orientation) —
+   * no separate rig/pivot field. sampleTrack.ts already lerps position and
+   * slerps rotation (via quaternion) between keyframes, which is exactly
+   * "free camera" interpolation: no orbit target, no lookAt().
+   */
+  transform: SceneTransform;
+  posture?: Posture;
+  /** Camera field of view in degrees. Only meaningful for `type: "camera"` objects. */
+  fov?: number;
 }
 
 export interface SceneObject {
@@ -42,12 +60,37 @@ export interface SceneObject {
   transform: SceneTransform;
   posture?: Posture;
   defaultPosture?: Posture;
+  /** Sorted by time; a fresh camera starts with none, everything else starts with one at time 0. */
+  keyframes: Keyframe[];
+  /**
+   * Timestamp `transform`/`posture`/`fov` were last staged at via a live
+   * gizmo/pose edit, distinct from any committed keyframe. Valid only while it
+   * still matches `playback.elapsed` — scrubbing, playing, or selecting a
+   * keyframe all silently invalidate it just by moving elapsed away, no
+   * explicit reset needed. This is what lets a drag preview a pose without
+   * touching `keyframes` until "+ Keyframe" commits it. Static's own edits
+   * never move `playback.elapsed` away from 0, so this degrades to a plain
+   * direct write there.
+   */
+  liveEditTime: number | null;
+  /** Live-staged FOV, mirrors `transform`/`posture`'s live-edit staging. Only meaningful for `type: "camera"`. */
+  fov?: number;
+}
+
+export interface PlaybackState {
+  playing: boolean;
+  elapsed: number;
+  speed: number;
+  duration: number;
 }
 
 export interface ComposerState {
   objects: SceneObject[];
 
   selectedObjectId: string | null;
+
+  /** Selected keyframe on the selected object's track, for the timeline UI. Null when editing the object's live transform instead. */
+  selectedKeyframeId: string | null;
 
   activeTool: ComposerTool;
 
@@ -57,8 +100,7 @@ export interface ComposerState {
   /** Pose mode sub-mode: the gizmo scales the selected part's shape instead of rotating the joint. */
   partScaleMode: boolean;
 
-  /** Key into MOTIONS while a motion plays, else null. */
-  activeMotion: string | null;
+  playback: PlaybackState;
 
   /**
    * Live mannequin-js figures / primitive roots by object id. For mannequins this
@@ -76,6 +118,9 @@ export interface ComposerState {
 
   deleteObject: (id: string) => void;
 
+  /** Removes every object from the scene. A normal history-recorded edit, so Undo restores it. */
+  clearScene: () => void;
+
   selectObject: (id: string) => void;
 
   clearSelection: () => void;
@@ -86,11 +131,15 @@ export interface ComposerState {
 
   toggleObjectLock: (id: string) => void;
 
+  /** Writes into the keyframe at `playback.elapsed` (creating one via live-staging if none exists there yet) — degrades to a plain write when the object has no track (Static's usual case). */
   updateObjectTransform: (id: string, transform: Partial<SceneTransform>) => void;
 
   updateObjectPosture: (id: string, posture: Posture) => void;
 
   updateObjectDefaultPosture: (id: string, posture: Posture) => void;
+
+  /** Live-stages a new FOV, mirroring updateObjectTransform's staging. Only meaningful for `type: "camera"`. */
+  updateObjectFov: (id: string, fov: number) => void;
 
   setActiveTool: (tool: ComposerTool) => void;
 
@@ -98,7 +147,21 @@ export interface ComposerState {
 
   setPartScaleMode: (on: boolean) => void;
 
-  setActiveMotion: (key: string | null) => void;
+  addKeyframe: (objectId: string, time: number) => void;
+  /** Commits the object's current staged live edit as a new keyframe, appended after the last one. */
+  commitLiveKeyframe: (objectId: string) => void;
+  /** Replaces an object's whole track with a motion preset's keyframes — a fresh starting sequence, not a splice. */
+  applyMotionPreset: (objectId: string, keyframes: Keyframe[]) => void;
+  deleteKeyframe: (objectId: string, keyframeId: string) => void;
+  duplicateKeyframe: (objectId: string, keyframeId: string) => void;
+  moveKeyframeTime: (objectId: string, keyframeId: string, newTime: number) => void;
+  updateKeyframeTransform: (objectId: string, keyframeId: string, transform: Partial<SceneTransform>) => void;
+  selectKeyframe: (id: string | null) => void;
+
+  setPlaying: (playing: boolean) => void;
+  setElapsed: (elapsed: number) => void;
+  setSpeed: (speed: number) => void;
+  setDuration: (duration: number) => void;
 
   registerObjectInstance: (id: string, object: THREE.Object3D) => void;
 
@@ -115,7 +178,12 @@ export interface ComposerState {
   /** Past scene snapshots, oldest first. Empty means nothing to undo. */
   history: SceneObject[][];
 
+  /** Snapshots undone past, newest first. Cleared on any new edit. */
+  future: SceneObject[][];
+
   undo: () => void;
+
+  redo: () => void;
 
   /** Brackets a continuous edit (a gizmo drag) so it lands as one undo step. */
   beginHistoryGroup: () => void;
@@ -124,7 +192,7 @@ export interface ComposerState {
 }
 
 /**
- * Scene history — in memory only, no persistence, no redo.
+ * Scene history — in memory only, no persistence.
  *
  * A snapshot is just the previous `objects` array reference. Every mutator here
  * replaces it immutably, so the old reference is already a valid frozen scene and
@@ -132,13 +200,14 @@ export interface ComposerState {
  * That is also why history needs no per-action instrumentation — the wrapped
  * `set` below records whenever `objects` changes identity, so anything that edits
  * the scene (transform, posture, add, delete, rename, visibility, lock, joint
- * edits) is covered, including code added later.
+ * edits, keyframes) is covered, including code added later.
  *
- * ponytail: `objects` is the whole history — camera, active tool and selection
- * are deliberately not restored, and there is no redo. Add a full command stack
- * if undo ever needs to cross those.
+ * ponytail: `objects` is the whole history — camera, active tool, selection and
+ * playback are deliberately not restored. Add a full command stack if undo ever
+ * needs to cross those.
  */
 const HISTORY_LIMIT = 50;
+const KEYFRAME_EPSILON = 1 / 24; // one frame at 24fps
 
 let suppressHistory = false;
 let groupDepth = 0;
@@ -167,8 +236,8 @@ const withHistory =
         groupRecorded = true;
       }
 
-      // Touches `history` alone, so this nested call records nothing itself.
-      (set as any)({ history: [...get().history, before].slice(-HISTORY_LIMIT) });
+      // Touches `history`/`future` alone, so this nested call records nothing itself.
+      (set as any)({ history: [...get().history, before].slice(-HISTORY_LIMIT), future: [] });
     };
 
     return initializer(recordingSet, get, api);
@@ -177,62 +246,116 @@ const withHistory =
 // Backward-compatible type aliases (can be removed after migration)
 export type MannequinSceneObject = SceneObject;
 export type MannequinTransform = SceneTransform;
+/** Aliases so scene/motion library helpers can keep importing these names unchanged. */
+export type MotionObject = SceneObject;
+export type MotionObjectType = ObjectType;
 
-function createObject(
-  index: number,
-  type: ObjectType,
-): SceneObject {
-  const baseTransform: SceneTransform = {
-    position: [0, 0, 0],
-    rotation: [0, 0, 0],
-    scale: [1, 1, 1],
-  };
-
-  let name: string;
-  if (isPrimitiveType(type)) {
-    name = `${type.charAt(0).toUpperCase()}${type.slice(1)} ${String(index).padStart(2, "0")}`;
-  } else {
-    name = `${type.charAt(0).toUpperCase()}${type.slice(1)} ${String(index).padStart(2, "0")}`;
-  }
-
-  return {
-    id: crypto.randomUUID(),
-    name,
-    type,
-    visible: true,
-    locked: false,
-    transform: baseTransform,
-  };
-}
+const PRIMITIVE_TYPES: PrimitiveType[] = ["cube", "plane", "cylinder", "sphere", "capsule", "cone", "torus"];
 
 function isPrimitiveType(type: ObjectType): type is PrimitiveType {
-  return ["cube", "plane", "cylinder", "sphere", "capsule", "cone", "torus"].includes(type);
+  return (PRIMITIVE_TYPES as ObjectType[]).includes(type);
 }
 
 /**
- * Pose editing exists only for mannequins — a primitive has no joints, so leaving
- * Pose active on one shows no gizmo at all and every tool looks dead. Every path
- * that changes the selection or the tool routes through this.
+ * Pose editing exists only for mannequins — a primitive or camera has no
+ * joints, so leaving Pose active on one shows no gizmo at all and every tool
+ * looks dead. Every path that changes the selection or the tool routes
+ * through this.
  */
 function canPoseSelection(objects: SceneObject[], id: string | null): boolean {
   const target = objects.find((o) => o.id === id);
-  return !!target && !isPrimitiveType(target.type);
+  return !!target && !isPrimitiveType(target.type) && target.type !== "camera";
 }
 
 /** True when the current selection supports pose editing. For UI enablement. */
 export const selectCanPose = (s: ComposerState) =>
   canPoseSelection(s.objects, s.selectedObjectId);
 
-const initialObject = createObject(1, "male");
+function findNearKeyframeIndex(keyframes: Keyframe[], time: number): number {
+  return keyframes.findIndex((k) => Math.abs(k.time - time) <= KEYFRAME_EPSILON);
+}
+
+/**
+ * "If a user moves the object at a new time, automatically create a
+ * keyframe." Overwrites a keyframe within one frame of `time`, or seeds a new
+ * one from the currently sampled transform/posture at that time.
+ */
+function upsertKeyframe(
+  keyframes: Keyframe[],
+  time: number,
+  patch: { transform?: Partial<SceneTransform>; posture?: Posture; fov?: number },
+  fallback?: { transform: SceneTransform; posture?: Posture; fov?: number },
+): Keyframe[] {
+  const index = findNearKeyframeIndex(keyframes, time);
+  if (index >= 0) {
+    const existing = keyframes[index];
+    const updated: Keyframe = {
+      ...existing,
+      transform: patch.transform ? { ...existing.transform, ...patch.transform } : existing.transform,
+      posture: patch.posture ? clonePosture(patch.posture) : existing.posture,
+      fov: patch.fov ?? existing.fov,
+    };
+    const next = [...keyframes];
+    next[index] = updated;
+    return next;
+  }
+
+  // An empty track (e.g. a camera before its first "+ Keyframe") has nothing
+  // to sample — fall back to the object's own current live-staged fields.
+  const sampled = keyframes.length > 0 ? sampleTrack(keyframes, time) : fallback!;
+  const seeded: Keyframe = {
+    id: crypto.randomUUID(),
+    time,
+    transform: patch.transform ? { ...sampled.transform, ...patch.transform } : sampled.transform,
+    posture: patch.posture ? clonePosture(patch.posture) : sampled.posture,
+    fov: patch.fov ?? sampled.fov,
+  };
+  return [...keyframes, seeded].sort((a, b) => a.time - b.time);
+}
+
+/** The transform/posture/fov a live edit should build on top of: the still-valid staged edit, or the sampled track. */
+function stageBase(o: SceneObject, elapsed: number): { transform: SceneTransform; posture?: Posture; fov?: number } {
+  const isLive = o.liveEditTime !== null && Math.abs(o.liveEditTime - elapsed) < 1e-6;
+  // A track-less object (a fresh camera before its first "+ Keyframe", or any
+  // Static object before it has ever moved off elapsed 0) has nothing to
+  // sample beyond its own current fields.
+  if (isLive || o.keyframes.length === 0) {
+    return { transform: o.transform, posture: o.posture, fov: o.fov };
+  }
+  return sampleTrack(o.keyframes, elapsed);
+}
+
+function objectName(type: ObjectType, index: number): string {
+  return `${type.charAt(0).toUpperCase()}${type.slice(1)} ${String(index).padStart(2, "0")}`;
+}
+
+function createInitialObject(): SceneObject {
+  const transform: SceneTransform = { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] };
+  return {
+    id: crypto.randomUUID(),
+    name: "Male 01",
+    type: "male",
+    visible: true,
+    locked: false,
+    transform,
+    keyframes: [{ id: crypto.randomUUID(), time: 0, transform }],
+    liveEditTime: null,
+  };
+}
+
+const initialObjects = [createInitialObject()];
+const initialSelectedId = initialObjects[0]?.id ?? null;
 
 export const useComposerStore =
   create<ComposerState>(
     withHistory((set, get) => ({
-      objects: [initialObject],
+      objects: initialObjects,
 
       history: [],
+      future: [],
 
-      selectedObjectId: initialObject.id,
+      selectedObjectId: initialSelectedId,
+      selectedKeyframeId: null,
 
       activeTool: "move",
 
@@ -240,26 +363,45 @@ export const useComposerStore =
 
       partScaleMode: false,
 
-      activeMotion: null,
+      playback: { playing: false, elapsed: 0, speed: 1, duration: 6 },
 
       objectInstances: new Map<string, THREE.Object3D>(),
 
       addObject: (type) => {
         const current = get().objects;
-        const object = createObject(current.length + 1, type);
-
-        object.transform.position = [
-          current.length * 1.5,
-          0,
-          0,
-        ];
+        const position: [number, number, number] = [current.length * 1.5, 0, 0];
+        // A freshly placed camera looks at the origin by default (a sensible
+        // starting frame), free to be dragged anywhere afterward — not a pivot
+        // it stays bound to.
+        const rotation: [number, number, number] = type === "camera"
+          ? (() => {
+              const { yaw, pitch } = yawPitchTowards(position, [0, 0, 0]);
+              return eulerFromYawPitch(yaw, pitch);
+            })()
+          : [0, 0, 0];
+        const transform: SceneTransform = { position, rotation, scale: [1, 1, 1] };
+        const fov = type === "camera" ? 10 : undefined;
+        const object: SceneObject = {
+          id: crypto.randomUUID(),
+          name: objectName(type, current.length + 1),
+          type,
+          visible: true,
+          locked: false,
+          transform,
+          fov,
+          // Cameras start with no keyframe at all — one is only recorded when
+          // the user explicitly clicks "+ Keyframe" for the first time.
+          keyframes: type === "camera" ? [] : [{ id: crypto.randomUUID(), time: 0, transform }],
+          liveEditTime: null,
+        };
 
         set({
           objects: [...current, object],
           selectedObjectId: object.id,
+          selectedKeyframeId: null,
           // A new object must be editable the moment it lands. Move is the tool
           // that applies to both mannequins and primitives, and it is never left
-          // in Pose, which a primitive cannot use.
+          // in Pose, which a primitive/camera cannot use.
           activeTool: "move",
           selectedJointKey: null,
           partScaleMode: false,
@@ -283,35 +425,60 @@ export const useComposerStore =
         const source = objects.find((o) => o.id === id);
         if (!source) return;
 
+        // Clone the object's CURRENT effective state (whatever is actually on
+        // screen right now — a live gizmo edit or a sampled keyframe), not the
+        // raw `.transform`/`.posture` fields, which are stale whenever the
+        // object has committed keyframes. Cloning those stale fields as-is
+        // used to (a) reset a scaled primitive back to its keyframed default
+        // dimensions, and (b) place a duplicated mannequin exactly on top of
+        // the original at its stale spawn position, making it look like the
+        // duplicate never appeared.
+        const time = get().playback.elapsed;
+        const base = stageBase(source, time);
+
         const duplicate: SceneObject = {
           ...source,
           id: crypto.randomUUID(),
           name: `${source.name} Copy`,
           transform: {
             position: [
-              source.transform.position[0] + 1,
-              source.transform.position[1],
-              source.transform.position[2],
+              base.transform.position[0] + 1,
+              base.transform.position[1],
+              base.transform.position[2],
             ],
-            rotation: [...source.transform.rotation] as [number, number, number],
-            scale: [...source.transform.scale] as [number, number, number],
+            rotation: [...base.transform.rotation] as [number, number, number],
+            scale: [...base.transform.scale] as [number, number, number],
           },
-          posture: source.posture
-            ? { ...source.posture, data: source.posture.data.map((arr) => [...arr]) }
-            : undefined,
+          fov: base.fov,
+          keyframes: source.keyframes.map((k) => ({
+            ...k,
+            id: crypto.randomUUID(),
+            transform: {
+              position: [...k.transform.position] as [number, number, number],
+              rotation: [...k.transform.rotation] as [number, number, number],
+              scale: [...k.transform.scale] as [number, number, number],
+            },
+            posture: k.posture ? clonePosture(k.posture) : undefined,
+          })),
+          posture: base.posture ? clonePosture(base.posture) : undefined,
           defaultPosture: source.defaultPosture
             ? { ...source.defaultPosture, data: source.defaultPosture.data.map((arr) => [...arr]) }
             : undefined,
+          // Matches `time`, so the duplicate reads as "live" immediately and
+          // renders from the fields set above instead of its (stale) cloned
+          // keyframe track — see `stageBase`/`AnimatedObject`'s `effectiveLive`.
+          liveEditTime: time,
         };
 
         set({
           objects: [...objects, duplicate],
           selectedObjectId: duplicate.id,
+          selectedKeyframeId: null,
         });
       },
 
       deleteObject: (id) => {
-        const { objects, selectedObjectId, activeTool } = get();
+        const { objects, selectedObjectId, activeTool, selectedKeyframeId } = get();
         const remaining = objects.filter((o) => o.id !== id);
         const nextSelected =
           selectedObjectId === id
@@ -320,39 +487,56 @@ export const useComposerStore =
               : null
             : selectedObjectId;
 
-        // Deleting the last mannequin can drop the selection onto a primitive,
-        // which cannot stay in Pose without leaving every tool dead.
+        // Deleting the last mannequin can drop the selection onto a primitive
+        // or camera, which cannot stay in Pose without leaving every tool dead.
         const poseStillValid =
           activeTool !== "pose" || canPoseSelection(remaining, nextSelected);
 
         set({
           objects: remaining,
           selectedObjectId: nextSelected,
+          selectedKeyframeId: selectedObjectId === id ? null : selectedKeyframeId,
           activeTool: poseStillValid ? activeTool : "move",
           selectedJointKey: poseStillValid ? get().selectedJointKey : null,
           partScaleMode: poseStillValid ? get().partScaleMode : false,
         });
       },
 
+      clearScene: () => {
+        set({
+          objects: [],
+          selectedObjectId: null,
+          selectedKeyframeId: null,
+          selectedJointKey: null,
+          partScaleMode: false,
+          activeTool: "move",
+          playback: { ...get().playback, playing: false, elapsed: 0 },
+        });
+      },
+
       selectObject: (id) => {
-        if (get().selectedObjectId === id) return;
-        const { objects, activeTool } = get();
-        // Clicking a primitive while in Pose falls back to Move, so the click
-        // leaves a working gizmo instead of none.
+        const { selectedObjectId, selectedKeyframeId, objects, activeTool } = get();
+        // No early-return-and-done when re-clicking the same object: that click
+        // is also how a user backs out of editing a selected keyframe and
+        // returns to editing the object's live transform.
+        if (selectedObjectId === id && selectedKeyframeId === null) return;
+        // Clicking a primitive/camera while in Pose falls back to Move, so the
+        // click leaves a working gizmo instead of none.
         if (activeTool === "pose" && !canPoseSelection(objects, id)) {
           set({
             selectedObjectId: id,
             selectedJointKey: null,
+            selectedKeyframeId: null,
             activeTool: "move",
             partScaleMode: false,
           });
           return;
         }
-        set({ selectedObjectId: id, selectedJointKey: null });
+        set({ selectedObjectId: id, selectedJointKey: null, selectedKeyframeId: null });
       },
 
       clearSelection: () => {
-        set({ selectedObjectId: null, selectedJointKey: null });
+        set({ selectedObjectId: null, selectedJointKey: null, selectedKeyframeId: null });
       },
 
       renameObject: (id, name) => {
@@ -380,15 +564,13 @@ export const useComposerStore =
       },
 
       updateObjectTransform: (id, transform) => {
+        const time = get().playback.elapsed;
         set((state) => ({
-          objects: state.objects.map((o) =>
-            o.id === id
-              ? {
-                  ...o,
-                  transform: { ...o.transform, ...transform },
-                }
-              : o,
-          ),
+          objects: state.objects.map((o) => {
+            if (o.id !== id) return o;
+            const base = stageBase(o, time);
+            return { ...o, transform: { ...base.transform, ...transform }, posture: base.posture, fov: base.fov, liveEditTime: time };
+          }),
         }));
       },
 
@@ -398,10 +580,13 @@ export const useComposerStore =
           console.error(`[composerStore] rejected posture for ${id}: ${error}`);
           return;
         }
+        const time = get().playback.elapsed;
         set((state) => ({
-          objects: state.objects.map((o) =>
-            o.id === id ? { ...o, posture: clonePosture(posture) } : o,
-          ),
+          objects: state.objects.map((o) => {
+            if (o.id !== id) return o;
+            const base = stageBase(o, time);
+            return { ...o, transform: base.transform, posture: clonePosture(posture), liveEditTime: time };
+          }),
         }));
       },
 
@@ -422,10 +607,21 @@ export const useComposerStore =
         );
       },
 
+      updateObjectFov: (id, fov) => {
+        const time = get().playback.elapsed;
+        set((state) => ({
+          objects: state.objects.map((o) => {
+            if (o.id !== id) return o;
+            const base = stageBase(o, time);
+            return { ...o, transform: base.transform, posture: base.posture, fov, liveEditTime: time };
+          }),
+        }));
+      },
+
       setActiveTool: (tool) => {
-        // Pose on a primitive is ignored outright, so the working tool stays put
-        // rather than switching to one with no gizmo. Covers the P shortcut and
-        // both toolbars in one place.
+        // Pose on a primitive/camera is ignored outright, so the working tool
+        // stays put rather than switching to one with no gizmo. Covers the P
+        // shortcut and both toolbars in one place.
         if (tool === "pose" && !canPoseSelection(get().objects, get().selectedObjectId)) return;
 
         // Joint editing only exists inside pose mode; leaving it drops the joint
@@ -442,9 +638,143 @@ export const useComposerStore =
         set({ partScaleMode: on });
       },
 
-      setActiveMotion: (key) => {
-        set({ activeMotion: key });
+      addKeyframe: (objectId, time) => {
+        set((state) => ({
+          objects: state.objects.map((o) =>
+            o.id === objectId
+              ? { ...o, keyframes: upsertKeyframe(o.keyframes, time, {}, { transform: o.transform, posture: o.posture, fov: o.fov }) }
+              : o,
+          ),
+        }));
       },
+
+      commitLiveKeyframe: (objectId) => {
+        set((state) => {
+          const target = state.objects.find((o) => o.id === objectId);
+          if (!target) return state;
+          const time = state.playback.elapsed;
+          const base = stageBase(target, time);
+          // The very first keyframe ever committed lands exactly where the user
+          // is currently parked, rather than being pushed a second ahead.
+          const newTime = target.keyframes.length
+            ? Math.max(target.keyframes[target.keyframes.length - 1].time + 1, time)
+            : time;
+          const keyframe: Keyframe = {
+            id: crypto.randomUUID(),
+            time: newTime,
+            transform: { ...base.transform },
+            posture: base.posture ? clonePosture(base.posture) : undefined,
+            fov: base.fov,
+          };
+          return {
+            objects: state.objects.map((o) =>
+              o.id === objectId
+                ? { ...o, keyframes: [...o.keyframes, keyframe].sort((a, b) => a.time - b.time) }
+                : o,
+            ),
+            selectedKeyframeId: null,
+            playback: {
+              ...state.playback,
+              elapsed: newTime,
+              playing: false,
+              duration: Math.max(state.playback.duration, newTime),
+            },
+          };
+        });
+      },
+
+      applyMotionPreset: (objectId, keyframes) => {
+        if (keyframes.length === 0) return;
+        const maxTime = keyframes[keyframes.length - 1].time;
+        set((state) => ({
+          objects: state.objects.map((o) =>
+            o.id === objectId ? { ...o, keyframes, liveEditTime: null } : o,
+          ),
+          selectedKeyframeId: null,
+          playback: { ...state.playback, elapsed: 0, playing: false, duration: Math.max(state.playback.duration, maxTime) },
+        }));
+      },
+
+      deleteKeyframe: (objectId, keyframeId) => {
+        set((state) => ({
+          objects: state.objects.map((o) => {
+            if (o.id !== objectId || o.keyframes.length <= 1) return o;
+            return { ...o, keyframes: o.keyframes.filter((k) => k.id !== keyframeId) };
+          }),
+          selectedKeyframeId: state.selectedKeyframeId === keyframeId ? null : state.selectedKeyframeId,
+        }));
+      },
+
+      duplicateKeyframe: (objectId, keyframeId) => {
+        const { objects, playback } = get();
+        const object = objects.find((o) => o.id === objectId);
+        const source = object?.keyframes.find((k) => k.id === keyframeId);
+        if (!object || !source) return;
+        const duplicate: Keyframe = {
+          ...source,
+          id: crypto.randomUUID(),
+          time: Math.min(source.time + 0.25, playback.duration),
+          transform: {
+            position: [...source.transform.position] as [number, number, number],
+            rotation: [...source.transform.rotation] as [number, number, number],
+            scale: [...source.transform.scale] as [number, number, number],
+          },
+          posture: source.posture ? clonePosture(source.posture) : undefined,
+        };
+        set({
+          objects: objects.map((o) =>
+            o.id === objectId ? { ...o, keyframes: [...o.keyframes, duplicate].sort((a, b) => a.time - b.time) } : o,
+          ),
+          selectedKeyframeId: duplicate.id,
+        });
+      },
+
+      moveKeyframeTime: (objectId, keyframeId, newTime) => {
+        const clamped = Math.max(0, newTime);
+        set((state) => ({
+          objects: state.objects.map((o) =>
+            o.id !== objectId
+              ? o
+              : {
+                  ...o,
+                  keyframes: o.keyframes
+                    .map((k) => (k.id === keyframeId ? { ...k, time: clamped } : k))
+                    .sort((a, b) => a.time - b.time),
+                },
+          ),
+        }));
+      },
+
+      updateKeyframeTransform: (objectId, keyframeId, transform) => {
+        set((state) => ({
+          objects: state.objects.map((o) => {
+            if (o.id !== objectId) return o;
+            return {
+              ...o,
+              keyframes: o.keyframes.map((k) =>
+                k.id === keyframeId ? { ...k, transform: { ...k.transform, ...transform } } : k,
+              ),
+            };
+          }),
+        }));
+      },
+
+      selectKeyframe: (id) => {
+        const object = get().objects.find((o) => o.id === get().selectedObjectId);
+        const keyframe = object?.keyframes.find((k) => k.id === id);
+        set((state) => ({
+          selectedKeyframeId: id,
+          playback: keyframe ? { ...state.playback, elapsed: keyframe.time, playing: false } : state.playback,
+        }));
+      },
+
+      setPlaying: (playing) => set((state) => ({ playback: { ...state.playback, playing } })),
+      setElapsed: (elapsed) => set((state) => ({ playback: { ...state.playback, elapsed } })),
+      setSpeed: (speed) => set((state) => ({ playback: { ...state.playback, speed } })),
+      setDuration: (duration) =>
+        set((state) => ({
+          playback: { ...state.playback, duration, elapsed: Math.min(state.playback.elapsed, duration) },
+        })),
 
       registerObjectInstance: (id: string, object: THREE.Object3D) => {
         set((state) => {
@@ -461,13 +791,7 @@ export const useComposerStore =
       },
 
       resetObjectTransform: (id: string) => {
-        set((state) => ({
-          objects: state.objects.map((o) =>
-            o.id === id
-              ? { ...o, transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] } }
-              : o,
-          ),
-        }));
+        get().updateObjectTransform(id, { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] });
       },
 
       /**
@@ -501,7 +825,7 @@ export const useComposerStore =
       },
 
       undo: () => {
-        const { history, selectedObjectId, selectedJointKey } = get();
+        const { history, selectedObjectId, selectedJointKey, objects } = get();
         if (history.length === 0) return;
 
         const previous = history[history.length - 1];
@@ -513,9 +837,26 @@ export const useComposerStore =
           set({
             objects: previous,
             history: history.slice(0, -1),
+            future: [objects, ...get().future].slice(0, HISTORY_LIMIT),
             selectedObjectId: selectionSurvives
               ? selectedObjectId
               : previous[0]?.id ?? null,
+            selectedJointKey: selectionSurvives ? selectedJointKey : null,
+          }),
+        );
+      },
+
+      redo: () => {
+        const { future, selectedObjectId, selectedJointKey, objects, history } = get();
+        if (future.length === 0) return;
+        const next = future[0];
+        const selectionSurvives = next.some((o) => o.id === selectedObjectId);
+        withoutHistory(() =>
+          set({
+            objects: next,
+            future: future.slice(1),
+            history: [...history, objects].slice(-HISTORY_LIMIT),
+            selectedObjectId: selectionSurvives ? selectedObjectId : next[0]?.id ?? null,
             selectedJointKey: selectionSurvives ? selectedJointKey : null,
           }),
         );

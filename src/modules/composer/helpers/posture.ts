@@ -151,3 +151,32 @@ export function clonePosture(posture: Posture): Posture {
   }
   return clone;
 }
+
+/**
+ * Swaps each l_* rotation block with its r_* counterpart (legs, knees, ankles,
+ * arms, elbows, wrists, fingers). This reuses the pose's own authored angles —
+ * it never fabricates a value — so from a single authored mid-stride pose it
+ * produces the opposite-leg mid-stride for a walk/run cycle. Note this is NOT
+ * a true left-right mirror (body/torso/head turn is left untouched), just a
+ * limb-pair swap, which is all a symmetric gait cycle needs.
+ */
+export function mirrorPosture(posture: Posture): Posture {
+  const clone = clonePosture(posture);
+  for (let i = 0; i < POSTURE_ENTRIES.length; i++) {
+    const name = POSTURE_ENTRIES[i];
+    if (!name.startsWith("l_")) continue;
+    const j = POSTURE_ENTRIES.indexOf(`r_${name.slice(2)}` as (typeof POSTURE_ENTRIES)[number]);
+    if (j === -1) continue;
+    [clone.data[i], clone.data[j]] = [clone.data[j], clone.data[i]];
+  }
+  if (clone.extra) {
+    for (const key of Object.keys(clone.extra)) {
+      if (!key.startsWith("l_")) continue;
+      const rKey = `r_${key.slice(2)}`;
+      const rVal = clone.extra[rKey];
+      if (!rVal) continue;
+      [clone.extra[key], clone.extra[rKey]] = [rVal, clone.extra[key]];
+    }
+  }
+  return clone;
+}

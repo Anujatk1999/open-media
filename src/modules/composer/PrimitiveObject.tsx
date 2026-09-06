@@ -1,7 +1,6 @@
 import { useLayoutEffect, useRef, useImperativeHandle, forwardRef } from "react";
 import * as THREE from "three";
 import type { ThreeEvent } from "@react-three/fiber";
-import { useComposerStore } from "../../stores/composerStore";
 
 export type PrimitiveType = "cube" | "plane" | "cylinder" | "sphere" | "capsule" | "cone" | "torus";
 
@@ -14,6 +13,8 @@ interface Props {
   scale: [number, number, number];
   visible?: boolean;
   selected?: boolean;
+  registerInstance: (id: string, object: THREE.Object3D) => void;
+  unregisterInstance: (id: string) => void;
   onReady?: (object: THREE.Object3D) => void;
   onSelect?: (id: string) => void;
 }
@@ -33,6 +34,8 @@ const PrimitiveObject = forwardRef<PrimitiveHandle, Props>(
       scale,
       visible = true,
       selected = false,
+      registerInstance,
+      unregisterInstance,
       onReady,
       onSelect,
     }: Props,
@@ -41,8 +44,6 @@ const PrimitiveObject = forwardRef<PrimitiveHandle, Props>(
     const root = useRef(new THREE.Group());
     const meshRef = useRef<THREE.Mesh | null>(null);
     const geometryRef = useRef<THREE.BufferGeometry | null>(null);
-    const registerInstance = useComposerStore((s) => s.registerObjectInstance);
-    const unregisterInstance = useComposerStore((s) => s.unregisterObjectInstance);
 
     useImperativeHandle(ref, () => ({
       root: root.current,
@@ -134,7 +135,7 @@ const PrimitiveObject = forwardRef<PrimitiveHandle, Props>(
       if (!mesh) return;
       const mat = mesh.material as THREE.MeshStandardMaterial;
       if (selected) {
-        mat.emissive.set(0x333300);
+        mat.emissive.set(0x1a1a00);
       } else {
         mat.emissive.set(0x000000);
       }

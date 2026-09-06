@@ -231,28 +231,6 @@
   text-align: center;
 }
 
-/* CAMERA ANGLES CARD */
-.camera-angles-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
-}
-
-.camera-angle-btn {
-  padding: 8px 12px;
-  border: 1px solid #30363a;
-  border-radius: 4px;
-  font-size: 11px;
-  color: #c4cbcc;
-  background: #1b2024;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-
-.camera-angle-btn:hover {
-  background: #30383a;
-  color: #d6ff53;
-}
-
 /* CUSTOM DETAILS/SUMMARY STYLING */
 .inspector-card summary::-webkit-details-marker,
 .joint-controls-toggle-summary::-webkit-details-marker {

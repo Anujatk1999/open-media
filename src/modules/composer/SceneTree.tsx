@@ -2,7 +2,7 @@ import "./SceneTree.css";
 
 export type CharacterType = "male" | "female" | "child";
 export type PrimitiveType = "cube" | "plane" | "cylinder" | "sphere" | "capsule" | "cone" | "torus";
-export type ObjectType = CharacterType | PrimitiveType;
+export type ObjectType = CharacterType | PrimitiveType | "camera";
 
 export interface SceneObjectData {
   id: string;
@@ -18,6 +18,8 @@ interface SceneTreeProps {
   onSelect: (id: string) => void;
   onAddCharacter: (type: CharacterType) => void;
   onAddPrimitive: (type: PrimitiveType) => void;
+  /** Optional: only the motion editor passes this, so the main composer's SceneTree renders unchanged. */
+  onAddCamera?: (type: "camera") => void;
   onToggleVisibility?: (id: string) => void;
   onToggleLock?: (id: string) => void;
   onDuplicate?: (id: string) => void;
@@ -43,6 +45,7 @@ export default function SceneTree({
   onSelect,
   onAddCharacter,
   onAddPrimitive,
+  onAddCamera,
   onToggleVisibility,
   onToggleLock,
   onDuplicate,
@@ -51,9 +54,9 @@ export default function SceneTree({
   return (
     <div className="scene-tree">
       {/* CHARACTERS SECTION */}
-      <div className="scene-tree-section">
-        <div className="scene-tree-header">
-          <h3>CHARACTERS</h3>
+      <details className="scene-section" open>
+        <summary className="scene-section-header">CHARACTERS</summary>
+        <div className="scene-section-body">
           <div className="scene-add-buttons">
             {CHARACTER_TYPES.map((type) => (
               <button key={type} onClick={() => onAddCharacter(type)}>
@@ -61,37 +64,37 @@ export default function SceneTree({
               </button>
             ))}
           </div>
-        </div>
 
-        <div className="scene-character-list">
-          {objects.filter(o => !["cube", "plane", "cylinder", "sphere", "capsule", "cone", "torus"].includes(o.type)).length === 0 && (
-            <div className="scene-empty">No characters</div>
-          )}
+          <div className="scene-character-list">
+            {objects.filter(o => !["cube", "plane", "cylinder", "sphere", "capsule", "cone", "torus", "camera"].includes(o.type)).length === 0 && (
+              <div className="scene-empty">No characters</div>
+            )}
 
-          {objects
-            .filter((o) => !["cube", "plane", "cylinder", "sphere", "capsule", "cone", "torus"].includes(o.type))
-            .map((object) => {
-              const isSelected = selectedId === object.id;
-              return (
-                <SceneObjectItem
-                  key={object.id}
-                  object={object}
-                  isSelected={isSelected}
-                  onSelect={onSelect}
-                  onToggleVisibility={onToggleVisibility}
-                  onToggleLock={onToggleLock}
-                  onDuplicate={onDuplicate}
-                  onDelete={onDelete}
-                />
-              );
-            })}
+            {objects
+              .filter((o) => !["cube", "plane", "cylinder", "sphere", "capsule", "cone", "torus", "camera"].includes(o.type))
+              .map((object) => {
+                const isSelected = selectedId === object.id;
+                return (
+                  <SceneObjectItem
+                    key={object.id}
+                    object={object}
+                    isSelected={isSelected}
+                    onSelect={onSelect}
+                    onToggleVisibility={onToggleVisibility}
+                    onToggleLock={onToggleLock}
+                    onDuplicate={onDuplicate}
+                    onDelete={onDelete}
+                  />
+                );
+              })}
+          </div>
         </div>
-      </div>
+      </details>
 
       {/* PRIMITIVES SECTION */}
-      <div className="scene-tree-section">
-        <div className="scene-tree-header">
-          <h3>PRIMITIVES</h3>
+      <details className="scene-section" open>
+        <summary className="scene-section-header">PRIMITIVES</summary>
+        <div className="scene-section-body">
           <div className="scene-add-buttons">
             {PRIMITIVE_TYPES.map((type) => (
               <button key={type} onClick={() => onAddPrimitive(type)}>
@@ -99,32 +102,68 @@ export default function SceneTree({
               </button>
             ))}
           </div>
-        </div>
 
-        <div className="scene-character-list">
-          {objects.filter(o => ["cube", "plane", "cylinder", "sphere", "capsule", "cone", "torus"].includes(o.type)).length === 0 && (
-            <div className="scene-empty">No primitives</div>
-          )}
+          <div className="scene-character-list">
+            {objects.filter(o => ["cube", "plane", "cylinder", "sphere", "capsule", "cone", "torus"].includes(o.type)).length === 0 && (
+              <div className="scene-empty">No primitives</div>
+            )}
 
-          {objects
-            .filter((o) => ["cube", "plane", "cylinder", "sphere", "capsule", "cone", "torus"].includes(o.type))
-            .map((object) => {
-              const isSelected = selectedId === object.id;
-              return (
-                <SceneObjectItem
-                  key={object.id}
-                  object={object}
-                  isSelected={isSelected}
-                  onSelect={onSelect}
-                  onToggleVisibility={onToggleVisibility}
-                  onToggleLock={onToggleLock}
-                  onDuplicate={onDuplicate}
-                  onDelete={onDelete}
-                />
-              );
-            })}
+            {objects
+              .filter((o) => ["cube", "plane", "cylinder", "sphere", "capsule", "cone", "torus"].includes(o.type))
+              .map((object) => {
+                const isSelected = selectedId === object.id;
+                return (
+                  <SceneObjectItem
+                    key={object.id}
+                    object={object}
+                    isSelected={isSelected}
+                    onSelect={onSelect}
+                    onToggleVisibility={onToggleVisibility}
+                    onToggleLock={onToggleLock}
+                    onDuplicate={onDuplicate}
+                    onDelete={onDelete}
+                  />
+                );
+              })}
+          </div>
         </div>
-      </div>
+      </details>
+
+      {/* CAMERAS SECTION — motion editor only */}
+      {onAddCamera && (
+        <details className="scene-section" open>
+          <summary className="scene-section-header">CAMERAS</summary>
+          <div className="scene-section-body">
+            <div className="scene-add-buttons">
+              <button onClick={() => onAddCamera("camera")}>+ Camera</button>
+            </div>
+
+            <div className="scene-character-list">
+              {objects.filter((o) => o.type === "camera").length === 0 && (
+                <div className="scene-empty">No cameras</div>
+              )}
+
+              {objects
+                .filter((o) => o.type === "camera")
+                .map((object) => {
+                  const isSelected = selectedId === object.id;
+                  return (
+                    <SceneObjectItem
+                      key={object.id}
+                      object={object}
+                      isSelected={isSelected}
+                      onSelect={onSelect}
+                      onToggleVisibility={onToggleVisibility}
+                      onToggleLock={onToggleLock}
+                      onDuplicate={onDuplicate}
+                      onDelete={onDelete}
+                    />
+                  );
+                })}
+            </div>
+          </div>
+        </details>
+      )}
     </div>
   );
 }

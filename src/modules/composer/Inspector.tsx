@@ -1,7 +1,6 @@
 import type { SceneObject, SceneTransform } from "../../stores/composerStore";
 import { useComposerStore } from "../../stores/composerStore";
 import PosePanel from "./PosePanel";
-import { type EditorView } from "./cameraUtils";
 import "./Inspector.css";
 
 interface InspectorProps {
@@ -12,8 +11,6 @@ interface InspectorProps {
   onDuplicate: (id: string) => void;
   onDelete: (id: string) => void;
   onUpdateTransform: (id: string, transform: Partial<SceneTransform>) => void;
-  onSetCameraView?: (view: EditorView) => void;
-  onResetCamera?: () => void;
 }
 
 export default function Inspector({
@@ -24,8 +21,6 @@ export default function Inspector({
   onDuplicate,
   onDelete,
   onUpdateTransform,
-  onSetCameraView,
-  onResetCamera,
 }: InspectorProps) {
   const activeTool = useComposerStore((s) => s.activeTool);
   const resetObjectTransform = useComposerStore((s) => s.resetObjectTransform);
@@ -56,19 +51,6 @@ export default function Inspector({
             </span>
           </div>
           <p className="character-id">id: {character.id.slice(0, 8)}…</p>
-        </div>
-      </details>
-
-      {/* CAMERA ANGLES CARD */}
-      <details className="inspector-card">
-        <summary className="inspector-card-header">
-          <span className="inspector-card-title">Camera Angles</span>
-        </summary>
-        <div className="inspector-card-content">
-          <CameraAnglesPanel
-            onSetCameraView={onSetCameraView}
-            onResetCamera={onResetCamera}
-          />
         </div>
       </details>
 
@@ -307,50 +289,4 @@ function radToDeg(r: number): number {
 
 function degToRad(d: number): number {
   return (d * Math.PI) / 180;
-}
-
-const CAMERA_PRESETS: { label: string; view: EditorView }[] = [
-  { label: "Front", view: "front" },
-  { label: "Back", view: "back" },
-  { label: "Left", view: "left" },
-  { label: "Right", view: "right" },
-  { label: "Top", view: "top" },
-  { label: "Bottom", view: "bottom" },
-  { label: "Front Left", view: "front-left" },
-  { label: "Front Right", view: "front-right" },
-  { label: "Back Left", view: "back-left" },
-  { label: "Back Right", view: "back-right" },
-  { label: "Isometric", view: "isometric" },
-];
-
-function CameraAnglesPanel({
-  onSetCameraView,
-  onResetCamera,
-}: {
-  onSetCameraView?: (view: EditorView) => void;
-  onResetCamera?: () => void;
-}) {
-  if (!onSetCameraView || !onResetCamera) {
-    return <p className="muted" style={{ fontSize: 12, color: "#869094" }}>No camera control available</p>;
-  }
-
-  return (
-    <div className="camera-angles-grid">
-      {CAMERA_PRESETS.map((preset) => (
-        <button
-          key={preset.label}
-          className="camera-angle-btn"
-          onClick={() => onSetCameraView(preset.view)}
-        >
-          {preset.label}
-        </button>
-      ))}
-      <button
-        className="camera-angle-btn"
-        onClick={() => onResetCamera()}
-      >
-        Reset Camera
-      </button>
-    </div>
-  );
 }

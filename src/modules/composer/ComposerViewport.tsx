@@ -1,23 +1,25 @@
-import { Canvas, useThree } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
+import { flushSync } from 'react-dom';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsType } from 'three-stdlib';
 import { frameObject, getObjectBounds, setEditorView, type EditorView } from './cameraUtils';
-import { useComposerStore, type ComposerTool } from '../../stores/composerStore';
+import { useComposerStore, type ComposerTool, type SceneObject } from '../../stores/composerStore';
+import { sampleTrack } from '../motion/helpers/sampleTrack';
+import { writePosture, type Posture } from './helpers/posture';
 import MannequinObject from './MannequinObject';
-import type { MannequinHandle } from './MannequinObject';
 import PrimitiveObject from './PrimitiveObject';
-import type { PrimitiveHandle } from './PrimitiveObject';
+import CameraObject from '../motion/CameraObject';
 import TransformGizmo from './TransformGizmo';
 import WorkspaceToolbar from './WorkspaceToolbar';
 import PoseControls from './PoseControls';
 import JointGizmo from './JointGizmo';
-import MotionPlayer from './MotionPlayer';
-import { getJoint, getDOF, setDOF, JOINT_CONFIGS } from './helpers/jointConfig';
 import { CompositionControls, CompositionController, type CompositionCommand, type CompositionDirection } from './CompositionControls';
 import { removeMannequinCanvases } from './helpers/mannequinFactory';
-import { readPosture } from './helpers/posture';
+import { getCharacterAnchors, solveShot, type CharacterAnchors, type ShotParams } from '../library/calibration/shotSolver';
+
+export type ComposerMode = 'static' | 'motion';
 
 type WorkspaceApi = {
   view: (v: EditorView) => void;
@@ -28,21 +30,28 @@ type WorkspaceApi = {
   fitAll: () => void;
   resetView: () => void;
   captureShot: () => void;
-  setActiveTool: (tool: 'move' | 'rotate' | 'scale' | 'pose') => void;
+  exportVideo: (onProgress?: (fraction: number) => void) => Promise<void>;
+  setActiveTool: (tool: ComposerTool) => void;
+  applyShot: (params: ShotParams) => void;
+  getScene: () => THREE.Scene | null;
+  getCamera: () => THREE.Camera | null;
 };
 
 export interface ComposerViewportAPI {
-  setJoint: (mannequinId: string, configKey: string, dofIndex: number, value: number) => void;
-  getJointValues: (mannequinId: string) => Record<string, number>;
   setCameraView: (view: EditorView) => void;
   resetCamera: () => void;
   captureShot: () => void;
+  exportVideo: (onProgress?: (fraction: number) => void) => Promise<void>;
   zoomIn: () => void;
   zoomOut: () => void;
-  setActiveTool: (tool: 'move' | 'rotate' | 'scale' | 'pose') => void;
+  setActiveTool: (tool: ComposerTool) => void;
+  /** Solves the shot camera for the currently selected object and applies it directly to the main viewport camera — the same camera Move/Rotate/Scale/Pose then edit freely. No-op when nothing is selected. */
+  applyShot: (params: ShotParams) => void;
+  /** The live scene backing the main viewport, so the Shot Preview renders the same content through its own camera. */
+  getScene: () => THREE.Scene | null;
+  /** The live main-viewport camera, so the Shot Preview can mirror its exact pose every frame instead of keeping independent camera state. */
+  getCamera: () => THREE.Camera | null;
 }
-
-const workspaceAPIRef: { current: ComposerViewportAPI | null } = { current: null };
 
 /**
  * Right- and middle-drag both pan; the wheel already dollies, so a middle-drag
@@ -74,35 +83,160 @@ const CAMERA_CONFIG = { fov: 42, near: 0.02, far: 1000, position: [6, 4, 8] as [
 const GL_CONFIG = { preserveDrawingBuffer: true };
 const DPR: [number, number] = [1, 2];
 
-/**
- * The zoom readout owns its own state so a camera move cannot re-render `<Canvas>`.
- *
- * OrbitControls fires `change` once per frame while damping settles, and the
- * percentage used to be state on the component that renders `<Canvas>` — so every
- * one of those frames reconfigured the renderer and reconciled the whole scene
- * subtree, from a plain camera nudge. The publisher is module-level, and so
- * stable, which also keeps it out of the effect deps that subscribe to `change`.
- */
-let publishZoomPercent: ((pct: number) => void) | null = null;
-const onZoomPercent = (pct: number) => publishZoomPercent?.(pct);
+const PRIMITIVE_TYPES = ["cube", "plane", "cylinder", "sphere", "capsule", "cone", "torus"];
+const IDENTITY: [number, number, number] = [0, 0, 0];
+const IDENTITY_SCALE: [number, number, number] = [1, 1, 1];
 
-function ZoomReadout() {
-  const [pct, setPct] = useState(100);
-  useEffect(() => {
-    publishZoomPercent = setPct;
-    return () => { publishZoomPercent = null; };
-  }, []);
-  return <span>Zoom <b>{pct}%</b></span>;
+/**
+ * Priority order for MediaRecorder output: real MP4/H.264 first — confirmed
+ * supported via `MediaRecorder.isTypeSupported` in this project's target
+ * browsers, so this is not a hopeful fallback chain, it's expected to hit the
+ * first entry — then WebM as the safety net on browsers that lack it.
+ */
+const VIDEO_MIME_CANDIDATES = [
+  { mime: "video/mp4;codecs=avc1.42E01E", ext: "mp4" },
+  { mime: "video/mp4", ext: "mp4" },
+  { mime: "video/webm;codecs=vp9", ext: "webm" },
+  { mime: "video/webm", ext: "webm" },
+];
+
+function pickVideoMimeType() {
+  for (const candidate of VIDEO_MIME_CANDIDATES) {
+    if (MediaRecorder.isTypeSupported(candidate.mime)) return candidate;
+  }
+  return VIDEO_MIME_CANDIDATES[VIDEO_MIME_CANDIDATES.length - 1];
 }
 
-export const ComposerViewport = forwardRef<ComposerViewportAPI>(function ComposerViewport(_props, ref) {
+const EXPORT_WIDTH = 1280;
+
+/**
+ * Drives the real `PlaybackDriver`/`setPlaying` loop from t=0 to completion
+ * while recording, so the exported video is sampled through the exact same
+ * interpolation path as normal on-screen playback rather than a separate
+ * offline render. Rendering happens on a brand new, never-mounted
+ * WebGLRenderer/canvas pointed at the same `scene` graph — the interactive
+ * viewport's own canvas/camera are never touched, so nothing needs to be
+ * swapped back afterward there.
+ */
+function exportMotionVideo(
+  scene: THREE.Scene,
+  camera: THREE.PerspectiveCamera,
+  controls: OrbitControlsType | null,
+  onProgress?: (fraction: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const { mime, ext } = pickVideoMimeType();
+    const wasLayer1Enabled = camera.layers.isEnabled(1);
+    const wasOrbitEnabled = controls?.enabled ?? true;
+    const previousAspect = camera.aspect;
+    const previousSelectedId = useComposerStore.getState().selectedObjectId;
+
+    camera.layers.disable(1);
+    if (controls) controls.enabled = false;
+    useComposerStore.getState().clearSelection();
+
+    const width = EXPORT_WIDTH;
+    const height = Math.round(width / camera.aspect);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+
+    const canvas = document.createElement("canvas");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+    renderer.setSize(width, height, false);
+
+    let rafId = 0;
+    function renderLoop() {
+      renderer.render(scene, camera);
+      rafId = requestAnimationFrame(renderLoop);
+    }
+    renderLoop();
+
+    const stream = canvas.captureStream(30);
+    const recorder = new MediaRecorder(stream, { mimeType: mime });
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+
+    let unsubscribe = () => {};
+    function restore() {
+      cancelAnimationFrame(rafId);
+      renderer.dispose();
+      if (wasLayer1Enabled) camera.layers.enable(1);
+      if (controls) controls.enabled = wasOrbitEnabled;
+      camera.aspect = previousAspect;
+      camera.updateProjectionMatrix();
+      if (previousSelectedId) useComposerStore.getState().selectObject(previousSelectedId);
+      stream.getTracks().forEach((track) => track.stop());
+      unsubscribe();
+    }
+
+    recorder.onstop = () => {
+      restore();
+      const blob = new Blob(chunks, { type: mime });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const now = new Date();
+      const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
+      link.download = `motion-export-${timestamp}.${ext}`;
+      link.href = url;
+      link.click();
+      URL.revokeObjectURL(url);
+      resolve();
+    };
+    recorder.onerror = (event) => {
+      restore();
+      reject(event);
+    };
+
+    let started = false;
+    unsubscribe = useComposerStore.subscribe((state) => {
+      const { elapsed, duration, playing } = state.playback;
+      onProgress?.(duration > 0 ? Math.min(1, elapsed / duration) : 1);
+      if (playing) started = true;
+      if (started && !playing && recorder.state === "recording") recorder.stop();
+    });
+
+    useComposerStore.getState().setElapsed(0);
+    recorder.start();
+    useComposerStore.getState().setPlaying(true);
+  });
+}
+
+export interface ComposerViewportProps {
+  /** Fires once the workspace's imperative API (applyShot, getScene, getCamera, ...) is actually wired up — mirrors the Shot Builder's own onSceneReady pattern, since api starts out null for a render or two after mount. */
+  onSceneReady?: () => void;
+  /** The active shot framing, for "Save Scene" — the same value ShotBuilderPanel edits. */
+  shotParams: ShotParams;
+  mode: ComposerMode;
+  /** Grid/Composition-guide display are controlled from the top action bar (ComposerShell) so their buttons live in one place rather than duplicating state. */
+  grid: boolean;
+  compositionMode: boolean;
+  onToggleComposition: () => void;
+}
+
+export const ComposerViewport = forwardRef<ComposerViewportAPI, ComposerViewportProps>(function ComposerViewport({ onSceneReady, shotParams, mode, grid, compositionMode, onToggleComposition }, ref) {
   const [api, setApi] = useState<WorkspaceApi | null>(null);
-  const [grid, setGrid] = useState(true);
-  const [axes, setAxes] = useState(false);
-  const [compositionMode, setCompositionMode] = useState(false);
+  const [axes] = useState(false);
   const [compositionCommand, setCompositionCommand] = useState<CompositionCommand | null>(null);
-  const undo = useComposerStore(s => s.undo);
-  const canUndo = useComposerStore(s => s.history.length > 0);
+  const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const selectedObjectId = useComposerStore(s => s.selectedObjectId);
+  const activeTool = useComposerStore(s => s.activeTool);
+  const setActiveTool = useComposerStore(s => s.setActiveTool);
+  const commitLiveKeyframe = useComposerStore(s => s.commitLiveKeyframe);
+
+  const handleExportVideo = useCallback(async () => {
+    if (!api || exporting) return;
+    setExporting(true);
+    setExportProgress(0);
+    try {
+      await api.exportVideo(setExportProgress);
+    } finally {
+      setExporting(false);
+    }
+  }, [api, exporting]);
 
   // Cleanup mannequin-js canvases on unmount
   useEffect(() => {
@@ -128,7 +262,7 @@ export const ComposerViewport = forwardRef<ComposerViewportAPI>(function Compose
       if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
 
       switch (e.key.toLowerCase()) {
-        case 'c': setCompositionMode(v => !v); break;
+        case 'c': onToggleComposition(); break;
         case 'm': useComposerStore.getState().setActiveTool('move'); break;
         case 'r': useComposerStore.getState().setActiveTool('rotate'); break;
         case 's': useComposerStore.getState().setActiveTool('scale'); break;
@@ -140,7 +274,7 @@ export const ComposerViewport = forwardRef<ComposerViewportAPI>(function Compose
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [onToggleComposition]);
 
   const handleCompositionMove = useCallback((direction: CompositionDirection) => {
     setCompositionCommand({ direction, timestamp: Date.now() });
@@ -151,21 +285,27 @@ export const ComposerViewport = forwardRef<ComposerViewportAPI>(function Compose
   }, []);
 
   useImperativeHandle(ref, () => ({
-    setJoint(...args: Parameters<ComposerViewportAPI['setJoint']>) {
-      workspaceAPIRef.current?.setJoint(...args);
-    },
-    getJointValues(...args: Parameters<ComposerViewportAPI['getJointValues']>) {
-      return workspaceAPIRef.current?.getJointValues(...args) ?? {};
-    },
     setCameraView: (view: EditorView) => api?.view?.(view),
     resetCamera: () => api?.resetView?.(),
     captureShot: () => api?.captureShot?.(),
+    exportVideo: (onProgress) => api?.exportVideo?.(onProgress) ?? Promise.resolve(),
     zoomIn: () => api?.zoomIn?.(),
     zoomOut: () => api?.zoomOut?.(),
     setActiveTool: (tool: ComposerTool) => {
       useComposerStore.getState().setActiveTool(tool);
     },
+    applyShot: (params) => api?.applyShot?.(params),
+    getScene: () => api?.getScene?.() ?? null,
+    getCamera: () => api?.getCamera?.() ?? null,
   }), [api]);
+
+  // `api` starts out null and is only set once Workspace's own mount effect runs
+  // (a render or two after this component's), so callers waiting to call
+  // applyShot/getScene need this rather than assuming the ref is ready on
+  // their own first render.
+  useEffect(() => {
+    if (api) onSceneReady?.();
+  }, [api, onSceneReady]);
 
   return (
     <div className="composer-viewport">
@@ -175,175 +315,102 @@ export const ComposerViewport = forwardRef<ComposerViewportAPI>(function Compose
         camera={CAMERA_CONFIG}
         gl={GL_CONFIG}
       >
-        <WorkspaceWithAPI grid={grid} axes={axes} ready={setApi} onZoomChange={onZoomPercent} />
+        <Workspace grid={grid} axes={axes} ready={setApi} mode={mode} />
         <CompositionController
           enabled={compositionMode}
           command={compositionCommand}
           onCommandConsumed={handleCommandConsumed}
         />
       </Canvas>
-      <div className="workspace-toolbar">
-        <WorkspaceToolbar />
-        <button onClick={undo} disabled={!canUndo} title="Undo last scene change">
-          Undo
+      <div className={`workspace-toolbar-wrap${toolbarCollapsed ? ' collapsed' : ''}`}>
+        <button
+          type="button"
+          className="toolbar-toggle"
+          onClick={() => setToolbarCollapsed(v => !v)}
+          title={toolbarCollapsed ? 'Show toolbar' : 'Hide toolbar'}
+          aria-label={toolbarCollapsed ? 'Show toolbar' : 'Hide toolbar'}
+        >
+          {toolbarCollapsed ? '▲' : '▼'}
         </button>
-        <ZoomReadout />
-        <button type="button" onClick={() => api?.zoomIn()} title="Zoom In">+</button>
-        <button type="button" onClick={() => api?.zoomOut()} title="Zoom Out">-</button>
-        <button onClick={() => api?.frame()}>Frame Selected</button>
-        <button onClick={() => api?.resetView()}>Reset View</button>
-        <button className={grid ? 'on' : ''} onClick={() => setGrid(v => !v)}>Grid</button>
-        <button className={compositionMode ? 'on' : ''} onClick={() => setCompositionMode(v => !v)} title="Composition Mode">
-          Composition
-        </button>
+        <div className="workspace-toolbar">
+          {mode === 'motion' && (
+            <button
+              className={activeTool === 'select' ? 'on' : ''}
+              onClick={() => setActiveTool('select')}
+              title="Select (drag keyframe path points in the viewport)"
+            >
+              Select
+            </button>
+          )}
+          <WorkspaceToolbar />
+          {mode === 'motion' && (
+            <>
+              <i />
+              <button
+                className="primary"
+                onClick={() => selectedObjectId && commitLiveKeyframe(selectedObjectId)}
+                disabled={!selectedObjectId}
+                title="Capture the object's current pose as a new keyframe"
+              >
+                + Keyframe
+              </button>
+            </>
+          )}
+        </div>
       </div>
-      <button className="capture-shot-btn" onClick={() => api?.captureShot()} title="Capture Shot (PNG)">
-        Capture Shot
-      </button>
+      {mode === 'static' ? (
+        <button className="capture-shot-btn" onClick={() => api?.captureShot()} title="Capture Shot (PNG)">
+          Capture Shot
+        </button>
+      ) : (
+        <button className="capture-shot-btn" onClick={handleExportVideo} disabled={exporting} title="Export the full timeline as a video">
+          {exporting ? `Exporting… ${Math.round(exportProgress * 100)}%` : 'Download'}
+        </button>
+      )}
       <CompositionControls enabled={compositionMode} onMove={handleCompositionMove} />
     </div>
   );
 });
 
-function WorkspaceWithAPI(props: { grid: boolean; axes: boolean; ready: (api: WorkspaceApi) => void; onZoomChange?: (pct: number) => void }) {
-  const updatePosture = useComposerStore(s => s.updateObjectPosture);
-  const localMannequinRefs = useRef<Map<string, MannequinHandle>>(new Map());
-  const localPrimitiveRefs = useRef<Map<string, PrimitiveHandle>>(new Map());
-  const workspaceRef = useRef<{ setCameraView: (view: EditorView) => void; resetCamera: () => void } | null>(null);
-  const glRef = useRef<THREE.WebGLRenderer | null>(null);
-  const sceneRef = useRef<THREE.Scene | null>(null);
-  const cameraRef = useRef<THREE.Camera | null>(null);
-
-  const api = useMemo((): ComposerViewportAPI => ({
-    setJoint(mannequinId, configKey, dofIndex, value) {
-      const handle = localMannequinRefs.current.get(mannequinId);
-      if (!handle?.mannequin) return;
-      const m = handle.mannequin as any;
-      const joint = getJoint(m, configKey);
-      if (!joint) return;
-      const config = JOINT_CONFIGS.find(c => c.mannequinKey === configKey);
-      if (!config) return;
-      const dof = config.dofs[dofIndex];
-      if (!dof) return;
-      setDOF(joint, dof, value);
-      m.updateMatrixWorld(true);
-      updatePosture(mannequinId, readPosture(m));
-    },
-    getJointValues(mannequinId) {
-      const handle = localMannequinRefs.current.get(mannequinId);
-      if (!handle?.mannequin) return {};
-      const m = handle.mannequin as any;
-      const result: Record<string, number> = {};
-      for (const config of JOINT_CONFIGS) {
-        const joint = getJoint(m, config.mannequinKey);
-        if (!joint) continue;
-        config.dofs.forEach((dof, idx) => {
-          try {
-            result[`${config.mannequinKey}:${idx}`] = getDOF(joint, dof);
-          } catch {
-            result[`${config.mannequinKey}:${idx}`] = 0;
-          }
-        });
-      }
-      return result;
-    },
-    setCameraView(view: EditorView) {
-      workspaceRef.current?.setCameraView(view);
-    },
-    resetCamera() {
-      workspaceRef.current?.resetCamera();
-    },
-    captureShot() {
-      if (glRef.current && sceneRef.current && cameraRef.current) {
-        const renderer = glRef.current;
-        renderer.render(sceneRef.current, cameraRef.current);
-        renderer.domElement.toBlob((blob: Blob | null) => {
-          if (!blob) return;
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          const now = new Date();
-          const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-          link.download = `shot-${timestamp}.png`;
-          link.href = url;
-          link.click();
-          URL.revokeObjectURL(url);
-        }, 'image/png');
-      }
-    },
-    zoomIn() {
-      // This will be called via the api in useLayoutEffect
-      // We'll need to access the api from the Workspace
-    },
-    zoomOut() {
-      // Same as above
-    },
-    setActiveTool(tool: 'move' | 'rotate' | 'scale' | 'pose') {
-      useComposerStore.getState().setActiveTool(tool);
-    },
-  }), [updatePosture]);
-
-  workspaceAPIRef.current = api;
-
-  return <Workspace grid={props.grid} axes={props.axes} ready={props.ready} mannequinRefs={localMannequinRefs} primitiveRefs={localPrimitiveRefs} onZoomChange={props.onZoomChange} workspaceRef={workspaceRef} glRef={glRef} sceneRef={sceneRef} cameraRef={cameraRef} />;
-}
-
-function Workspace({
-  grid,
-  axes,
-  ready,
-  mannequinRefs,
-  primitiveRefs,
-  onZoomChange,
-  workspaceRef,
-  glRef,
-  sceneRef,
-  cameraRef,
-}: {
-  grid: boolean;
-  axes: boolean;
-  ready: (api: WorkspaceApi) => void;
-  mannequinRefs: React.MutableRefObject<Map<string, MannequinHandle>>;
-  primitiveRefs: React.MutableRefObject<Map<string, PrimitiveHandle>>;
-  onZoomChange?: (pct: number) => void;
-  workspaceRef: React.MutableRefObject<{ setCameraView: (view: EditorView) => void; resetCamera: () => void } | null>;
-  glRef: React.MutableRefObject<THREE.WebGLRenderer | null>;
-  sceneRef: React.MutableRefObject<THREE.Scene | null>;
-  cameraRef: React.MutableRefObject<THREE.Camera | null>;
-}) {
-  const { camera, gl, scene } = useThree();
-
-  // Populate the refs with actual Three.js objects from R3F context
-  useEffect(() => {
-    glRef.current = gl;
-    sceneRef.current = scene;
-    cameraRef.current = camera;
-  }, [gl, scene, camera]);
-  // useState + callback ref ensures useLayoutEffect fires after controls mount.
+function Workspace({ grid, axes, ready, mode }: { grid: boolean; axes: boolean; ready: (api: WorkspaceApi) => void; mode: ComposerMode }) {
+  const { camera, gl, scene, raycaster } = useThree();
   const [controls, setControls] = useState<OrbitControlsType | null>(null);
+  const exportingRef = useRef(false);
+
   const objects = useComposerStore(s => s.objects);
   const selectedId = useComposerStore(s => s.selectedObjectId);
   const selectObject = useComposerStore(s => s.selectObject);
   const clearSelection = useComposerStore(s => s.clearSelection);
   const activeTool = useComposerStore(s => s.activeTool);
+  const objectInstances = useComposerStore(s => s.objectInstances);
+  const selectedJointKey = useComposerStore(s => s.selectedJointKey);
+  const partScaleMode = useComposerStore(s => s.partScaleMode);
+  const selectJoint = useComposerStore(s => s.selectJoint);
+  const updateObjectTransform = useComposerStore(s => s.updateObjectTransform);
+  const updateObjectPosture = useComposerStore(s => s.updateObjectPosture);
+  const updateObjectDefaultPosture = useComposerStore(s => s.updateObjectDefaultPosture);
+  const registerObjectInstance = useComposerStore(s => s.registerObjectInstance);
+  const unregisterObjectInstance = useComposerStore(s => s.unregisterObjectInstance);
+  const beginHistoryGroup = useComposerStore(s => s.beginHistoryGroup);
+  const endHistoryGroup = useComposerStore(s => s.endHistoryGroup);
+  const selectedKeyframeId = useComposerStore(s => s.selectedKeyframeId);
+  const selectKeyframe = useComposerStore(s => s.selectKeyframe);
+  const updateKeyframeTransform = useComposerStore(s => s.updateKeyframeTransform);
 
-  // Track Object3D roots keyed by object id so we can frame selected.
+  const selected = objects.find(o => o.id === selectedId) ?? null;
+  const selectedFigure = selectedId ? objectInstances.get(selectedId) ?? null : null;
+  const selectedKeyframe = selected?.keyframes.find(k => k.id === selectedKeyframeId) ?? null;
+
+  // Track Object3D roots keyed by object id so we can frame/gizmo the selection.
   const rootsRef = useRef<Map<string, THREE.Object3D>>(new Map());
-
-  // Track the currently selected root so framing callbacks don't capture stale closures.
   const selectedRootRef = useRef<THREE.Object3D | null>(null);
-
-  // Objects already framed once, so selecting one later never yanks the camera.
   const framedIds = useRef(new Set<string>());
 
   /**
-   * Puts a newly added object on screen at a usable size, seen head-on.
-   *
-   * The direction is the same one the Front preset uses. `frameObject`'s default
-   * is the 3/4 view (1, .55, 1), which reads as tilted and sideways on a figure:
-   * mannequin-js bakes `body.turn = -90` into every default posture so the figure
-   * faces +Z, which is exactly where the prototype parks its own camera
-   * (`scene.js:60`, `position.set(0, 0, 5)`). Only the camera moves — the
-   * object's own transform and posture are untouched.
+   * Puts a newly added object on screen at a usable size, seen head-on. See
+   * the direction comment this carried over from Static's own Workspace —
+   * mannequin-js bakes body.turn = -90 into every default posture so the
+   * figure faces +Z, matching the Front preset's own direction.
    */
   const frameNewObject = (id: string) => {
     if (!controls || framedIds.current.has(id)) return;
@@ -355,35 +422,27 @@ function Workspace({
     frameObject(camera as THREE.PerspectiveCamera, controls, root, new THREE.Vector3(0, 0.08, 1));
   };
 
-  // A mannequin is built from a dynamic import, so its wrapper has no bounds to
-  // measure until that resolves — hence the second attempt on ready. The ref
-  // keeps the callback identity stable: MannequinObject rebuilds its figure
-  // whenever `onReady` changes.
   const frameOnReady = useRef<() => void>(() => {});
   frameOnReady.current = () => { if (selectedId) frameNewObject(selectedId); };
-  const handleMannequinReady = useCallback(() => frameOnReady.current(), []);
 
-  /**
-   * The gizmo target, resolved in an effect rather than in render.
-   *
-   * `rootsRef` is filled by the children's callback refs, which React attaches
-   * during commit — after the render phase has already run. Deriving `target`
-   * with `useMemo` therefore missed a newly added object every time: on the render
-   * where it first appears the Map has no entry yet, so `target` was null, and
-   * nothing re-rendered afterwards because a Map mutation is invisible to React.
-   * The gizmo stayed absent until some unrelated state change recomputed it —
-   * which is what "works only after focus leaves the viewport" was.
-   *
-   * Effects run after refs are attached, so the Map is populated by now. Keying on
-   * `objects` covers add and delete. Re-setting the same value is a no-op, so this
-   * cannot loop. `setTarget` is deliberately not called from the ref callbacks:
-   * those are inline arrows, so React re-runs them on every commit, and a setState
-   * there would never settle.
-   */
   const [target, setTarget] = useState<THREE.Object3D | null>(null);
   useEffect(() => {
     setTarget(selectedId ? rootsRef.current.get(selectedId) ?? null : null);
   }, [selectedId, objects]);
+
+  // A separate, persistent Object3D the gizmo attaches to when a keyframe
+  // (rather than the live object) is being edited — dragging it must only
+  // rewrite that one keyframe's stored transform, never the live root, which
+  // AnimatedObject drives independently every frame from the sampled track.
+  const keyframeProxyRef = useRef<THREE.Object3D>(new THREE.Object3D());
+  useLayoutEffect(() => {
+    if (!selectedKeyframe) return;
+    const proxy = keyframeProxyRef.current;
+    proxy.position.set(...selectedKeyframe.transform.position);
+    proxy.rotation.set(...selectedKeyframe.transform.rotation);
+    proxy.scale.set(...selectedKeyframe.transform.scale);
+  }, [selectedKeyframe]);
+  const gizmoTarget = selectedKeyframe ? keyframeProxyRef.current : target;
 
   // Objects restored with the scene are not new, so they must never pull the
   // camera the first time they are clicked.
@@ -391,50 +450,31 @@ function Workspace({
     for (const obj of useComposerStore.getState().objects) framedIds.current.add(obj.id);
   }, []);
 
-  // Adding an object selects it, so this covers primitives, which mount with
-  // their geometry already measurable. Mannequins arrive empty and are caught
-  // by onReady instead.
   useEffect(() => {
     if (selectedId) frameNewObject(selectedId);
   }, [selectedId, objects, controls]);
 
-  // Keep selectedRootRef in sync with selection changes.
   useEffect(() => {
     selectedRootRef.current = selectedId ? rootsRef.current.get(selectedId) ?? null : null;
   }, [selectedId, objects]);
 
-  // Initialize workspaceRef with camera control functions
   useEffect(() => {
-    if (!workspaceRef.current) return;
-    workspaceRef.current.setCameraView = (view: EditorView) => {
-      const r = selectedRootRef.current;
-      if (r && controls) {
-        setEditorView(camera as THREE.PerspectiveCamera, controls, r, view);
-      }
-    };
-    workspaceRef.current.resetCamera = () => {
-      const r = selectedRootRef.current;
-      if (controls) {
-        if (r) {
-          frameObject(camera as THREE.PerspectiveCamera, controls, r);
-        } else {
-          controls.target.set(0, 0.85, 0);
-          (camera as THREE.PerspectiveCamera).position.set(6, 4, 8);
-          (camera as THREE.PerspectiveCamera).lookAt(0, 0.85, 0);
-          controls.update();
-        }
-      }
-    };
-  }, [camera, controls, selectedRootRef, workspaceRef]);
+    if (controls) (camera as any).__orbitControls = controls;
+  }, [camera, controls]);
+
+  // Grid/axes/gizmo/keyframe-path chrome live on layer 1 so a second camera
+  // that never opts in (a cinematic camera, an export render) never sees it.
+  // R3F's shared pointer raycaster only tests layer 0 by default though, so
+  // without this, layer-1 chrome renders fine but stops being clickable.
+  useEffect(() => {
+    camera.layers.enable(1);
+    raycaster.layers.enable(1);
+  }, [camera, raycaster]);
 
   useLayoutEffect(() => {
     const c = camera as THREE.PerspectiveCamera;
     if (!controls) return;
 
-    // Set camera target to mannequin center height so the scene is centered
-    // with equal space above and below. Must call update() immediately so
-    // OrbitControls internal state matches — without it the camera still
-    // looks at the default (0,0,0) ground level.
     controls.target.set(0, 0.85, 0);
     c.lookAt(0, 0.85, 0);
     controls.update();
@@ -477,47 +517,85 @@ function Workspace({
         controls.update();
       },
       captureShot: () => {
-        if (glRef.current && sceneRef.current && cameraRef.current) {
-          const renderer = glRef.current;
-          renderer.render(sceneRef.current, cameraRef.current);
-          renderer.domElement.toBlob((blob: Blob | null) => {
-            if (!blob) return;
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            const now = new Date();
-            const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-            link.download = `shot-${timestamp}.png`;
-            link.href = url;
-            link.click();
-            URL.revokeObjectURL(url);
-          }, 'image/png');
-        }
+        const renderer = gl;
+        const wasLayer1Enabled = c.layers.isEnabled(1);
+        const previousSelectedId = useComposerStore.getState().selectedObjectId;
+
+        // Grid/axes/TransformGizmo/JointGizmo all live on layer 1, so
+        // disabling it here hides every one of them from this render with no
+        // per-mesh bookkeeping. A selected primitive tints its own material
+        // directly though (see PrimitiveObject.tsx) — layer 1 can't hide
+        // that, so the selection itself has to clear. flushSync forces that
+        // state change through PrimitiveObject's layout effect (which resets
+        // the tint) before the render call below, instead of landing a frame later.
+        c.layers.disable(1);
+        flushSync(() => useComposerStore.getState().clearSelection());
+
+        renderer.render(scene, c);
+        renderer.domElement.toBlob((blob: Blob | null) => {
+          if (wasLayer1Enabled) c.layers.enable(1);
+          if (previousSelectedId) flushSync(() => useComposerStore.getState().selectObject(previousSelectedId));
+
+          if (!blob) return;
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          const now = new Date();
+          const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+          link.download = `shot-${timestamp}.png`;
+          link.href = url;
+          link.click();
+          URL.revokeObjectURL(url);
+        }, 'image/png');
       },
-      setActiveTool: (tool: 'move' | 'rotate' | 'scale' | 'pose') => {
+      exportVideo: (onProgress) => {
+        if (exportingRef.current) return Promise.resolve();
+        exportingRef.current = true;
+
+        // If a cinematic camera object exists, export renders through it via
+        // its own offscreen renderer — the interactive canvas/camera are
+        // never swapped, so nothing here touches `gl` or the on-screen view.
+        const cameraObj = useComposerStore.getState().objects.find(o => o.type === "camera");
+        const cineCam = cameraObj ? (rootsRef.current.get(cameraObj.id) as THREE.PerspectiveCamera | undefined) : undefined;
+
+        return exportMotionVideo(scene, (cineCam ?? c) as THREE.PerspectiveCamera, controls, onProgress).finally(() => {
+          exportingRef.current = false;
+        });
+      },
+      setActiveTool: (tool) => {
         useComposerStore.getState().setActiveTool(tool);
       },
+      // The main viewport camera IS the shot camera: presets move it directly
+      // (fov stays whatever the viewport's own fov already is, so this never
+      // fights zoom), and nothing here keeps a second, preview-only copy of
+      // the solved position/target around.
+      applyShot: (params: ShotParams) => {
+        const root = selectedRootRef.current;
+        if (!root) return;
+        const anchors = getCharacterAnchors(root);
+
+        // "ots" looks past the selected/primary character at whichever other
+        // character is in the scene — find its root the same way the rest of
+        // this file already tracks every object's root (`rootsRef`).
+        let targetAnchors: CharacterAnchors | undefined;
+        if (params.angle === "ots") {
+          const state = useComposerStore.getState();
+          const isCharacterType = (t: SceneObject["type"]) => t === "male" || t === "female" || t === "child";
+          const other = state.objects.find((o) => o.id !== state.selectedObjectId && isCharacterType(o.type));
+          const otherRoot = other ? rootsRef.current.get(other.id) : undefined;
+          if (otherRoot) targetAnchors = getCharacterAnchors(otherRoot);
+        }
+
+        const solved = solveShot({ ...params, anchors, targetAnchors, fovDeg: c.fov, aspect: c.aspect });
+        c.position.copy(solved.position);
+        controls.target.copy(solved.target);
+        c.lookAt(solved.target);
+        c.updateProjectionMatrix();
+        controls.update();
+      },
+      getScene: () => scene,
+      getCamera: () => camera,
     });
-  }, [camera, controls]);
-
-  // Track zoom percentage for toolbar display
-  useEffect(() => {
-    if (!controls || !onZoomChange) return;
-    const update = () => {
-      const dist = controls.object.position.distanceTo(controls.target);
-      const pct = Math.round(Math.max(10, Math.min(300, 300 - ((dist - 1) / 99) * 285)));
-      onZoomChange(pct);
-    };
-    update();
-    controls.addEventListener('change', update);
-    return () => controls.removeEventListener('change', update);
-  }, [controls, onZoomChange]);
-
-  // Wire OrbitControls so TransformGizmo can disable them while dragging
-  useEffect(() => {
-    if (controls) {
-      (camera as any).__orbitControls = controls;
-    }
-  }, [camera, controls]);
+  }, [camera, controls, gl, scene]);
 
   return (
     <>
@@ -526,13 +604,14 @@ function Workspace({
       <directionalLight position={[5, 8, 6]} intensity={2.1} />
       <directionalLight position={[-4, 3, -5]} intensity={0.5} />
 
-      {grid && <gridHelper args={[100, 100, '#3c464b', '#242c30']} />}
-      {axes && <axesHelper args={[1.4]} />}
+      {grid && <gridHelper args={[100, 100, '#3c464b', '#242c30']} ref={(el) => el?.layers.set(1)} />}
+      {axes && <axesHelper args={[1.4]} ref={(el) => el?.layers.set(1)} />}
 
-      {/* Click empty space to deselect. Unmounted in pose mode: the plane spans
-          the whole ground and would swallow joint picks — PoseControls does its
+      {/* Click empty space to deselect. Unmounted in pose mode or select
+          mode: the plane spans the whole ground and would swallow joint
+          picks / keyframe-marker picks — PoseControls/KeyframePath do their
           own clearing there. Mirrors the prototype's `else if (!moveMode)`. */}
-      {activeTool !== "pose" && (
+      {activeTool !== "pose" && activeTool !== "select" && (
         <mesh
           visible={false}
           position={[0, -0.001, 0]}
@@ -548,65 +627,63 @@ function Workspace({
         </mesh>
       )}
 
-      {objects.map((obj) => {
-        const isPrimitive = ["cube", "plane", "cylinder", "sphere", "capsule", "cone", "torus"].includes(obj.type);
+      {objects.map((obj) => (
+        <AnimatedObject
+          key={obj.id}
+          object={obj}
+          selected={obj.id === selectedId}
+          registerInstance={registerObjectInstance}
+          unregisterInstance={unregisterObjectInstance}
+          onDefaultPosture={updateObjectDefaultPosture}
+          onSelect={() => selectObject(obj.id)}
+          onReady={(root) => {
+            rootsRef.current.set(obj.id, root);
+            frameOnReady.current();
+          }}
+        />
+      ))}
 
-        if (isPrimitive) {
-          return (
-            <PrimitiveObject
-              key={obj.id}
-              ref={(handle: PrimitiveHandle | null) => {
-                if (handle) {
-                  primitiveRefs.current.set(obj.id, handle);
-                  rootsRef.current.set(obj.id, handle.root);
-                } else {
-                  primitiveRefs.current.delete(obj.id);
-                  rootsRef.current.delete(obj.id);
-                }
-              }}
-              id={obj.id}
-              type={obj.type as "cube" | "plane" | "cylinder" | "sphere" | "capsule" | "cone" | "torus"}
-              name={obj.name}
-              position={obj.transform.position}
-              rotation={obj.transform.rotation}
-              scale={obj.transform.scale}
-              visible={obj.visible}
-              selected={obj.id === selectedId}
-              onSelect={selectObject}
-            />
-          );
-        } else {
-          return (
-            <MannequinObject
-              key={obj.id}
-              ref={(handle: MannequinHandle | null) => {
-                if (handle) {
-                  mannequinRefs.current.set(obj.id, handle);
-                  rootsRef.current.set(obj.id, handle.root);
-                } else {
-                  mannequinRefs.current.delete(obj.id);
-                  rootsRef.current.delete(obj.id);
-                }
-              }}
-              id={obj.id}
-              type={obj.type as "male" | "female" | "child"}
-              name={obj.name}
-              position={obj.transform.position}
-              rotation={obj.transform.rotation}
-              posture={obj.posture}
-              visible={obj.visible}
-              selected={obj.id === selectedId}
-              onReady={handleMannequinReady}
-              onSelect={selectObject}
-            />
-          );
-        }
-      })}
+      {mode === 'motion' && (
+        <KeyframePath
+          object={selected}
+          activeTool={activeTool}
+          selectedKeyframeId={selectedKeyframeId}
+          onSelectKeyframe={selectKeyframe}
+          onMoveKeyframe={(keyframeId, position) => selectedId && updateKeyframeTransform(selectedId, keyframeId, { position })}
+          onDragStart={beginHistoryGroup}
+          onDragEnd={endHistoryGroup}
+        />
+      )}
 
-      <PoseControls />
-      <JointGizmo />
-      <MotionPlayer />
-      <TransformGizmo target={target} />
+      <PoseControls
+        isPoseMode={activeTool === "pose"}
+        figure={selectedFigure}
+        onJointSelect={selectJoint}
+      />
+      <JointGizmo
+        isPoseMode={activeTool === "pose"}
+        figure={selectedFigure}
+        jointKey={selectedJointKey}
+        scaleMode={partScaleMode}
+        onPostureChange={(posture) => selectedId && updateObjectPosture(selectedId, posture)}
+        onDragStart={beginHistoryGroup}
+        onDragEnd={endHistoryGroup}
+      />
+      {mode === 'motion' && <primitive object={keyframeProxyRef.current} />}
+      <TransformGizmo
+        target={gizmoTarget}
+        activeTool={activeTool}
+        locked={selected?.locked ?? true}
+        transform={selectedKeyframe?.transform ?? selected?.transform ?? null}
+        onChange={(t) => {
+          if (!selectedId) return;
+          if (mode === 'motion' && selectedKeyframeId) { updateKeyframeTransform(selectedId, selectedKeyframeId, t); return; }
+          updateObjectTransform(selectedId, t);
+        }}
+        onDragStart={beginHistoryGroup}
+        onDragEnd={endHistoryGroup}
+      />
+      {mode === 'motion' && <PlaybackDriver />}
 
       <OrbitControls
         ref={(el: OrbitControlsType | null) => { if (el && el !== controls) setControls(el); }}
@@ -631,4 +708,303 @@ function Workspace({
       />
     </>
   );
+}
+
+interface AnimatedObjectProps {
+  object: SceneObject;
+  selected: boolean;
+  registerInstance: (id: string, obj: THREE.Object3D) => void;
+  unregisterInstance: (id: string) => void;
+  onDefaultPosture: (id: string, posture: Posture) => void;
+  onSelect: () => void;
+  onReady: (root: THREE.Object3D) => void;
+}
+
+/**
+ * Owns one object's live transform: samples its keyframes every frame and
+ * writes position/rotation/scale (and posture, if any) directly onto the
+ * THREE root, bypassing React state entirely so animating N objects never
+ * triggers N re-renders per frame. Mannequin/Primitive/Camera get fixed
+ * identity transform props for this reason — this component is the only
+ * thing that ever moves the root after mount.
+ *
+ * An object with 0-1 keyframes (Static mode never adds any) or whose
+ * liveEditTime still matches elapsed (a live gizmo drag/pose edit, staged
+ * separately from `keyframes`) samples straight off `object.transform`/
+ * `.posture`/`.fov` instead of the track — the same rendering path covers
+ * both Static and Motion mode with no mode branch here.
+ */
+function AnimatedObject({ object, selected, registerInstance, unregisterInstance, onDefaultPosture, onSelect, onReady }: AnimatedObjectProps) {
+  const rootRef = useRef<THREE.Object3D | null>(null);
+
+  useFrame(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const elapsed = useComposerStore.getState().playback.elapsed;
+    const isLive = object.liveEditTime !== null && Math.abs(object.liveEditTime - elapsed) < 1e-6;
+    const effectiveLive = isLive || object.keyframes.length === 0;
+    const sample = effectiveLive
+      ? { transform: object.transform, posture: object.posture, fov: object.fov }
+      : sampleTrack(object.keyframes, elapsed);
+
+    root.position.set(...sample.transform.position);
+    root.rotation.set(...sample.transform.rotation);
+    root.scale.set(...sample.transform.scale);
+
+    if (sample.posture) {
+      const figure = useComposerStore.getState().objectInstances.get(object.id);
+      if (figure) writePosture(figure as any, sample.posture);
+    }
+    if (object.type === "camera" && sample.fov !== undefined) {
+      const cam = root as THREE.PerspectiveCamera;
+      if (cam.fov !== sample.fov) {
+        cam.fov = sample.fov;
+        cam.updateProjectionMatrix();
+      }
+    }
+  });
+
+  // Stable identity across every re-render — MannequinObject/PrimitiveObject/
+  // CameraObject rebuild their figure from scratch whenever `onReady`'s
+  // reference changes (it's in their mount effect's deps), which otherwise
+  // happens on every store update (any position/pose/keyframe edit replaces
+  // `objects`, re-rendering this component).
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
+  const handleReady = useCallback((root: THREE.Object3D) => {
+    rootRef.current = root;
+    // Seeds the real spawn transform immediately, rather than leaving the
+    // root at THREE's default (0,0,0) until the next animation frame —
+    // frameNewObject's bounds check runs synchronously in this same commit,
+    // before useFrame ever ticks.
+    root.position.set(...object.transform.position);
+    root.rotation.set(...object.transform.rotation);
+    root.scale.set(...object.transform.scale);
+    onReadyRef.current(root);
+  }, []);
+
+  if (PRIMITIVE_TYPES.includes(object.type)) {
+    return (
+      <PrimitiveObject
+        id={object.id}
+        type={object.type as "cube" | "plane" | "cylinder" | "sphere" | "capsule" | "cone" | "torus"}
+        name={object.name}
+        position={IDENTITY}
+        rotation={IDENTITY}
+        scale={IDENTITY_SCALE}
+        visible={object.visible}
+        selected={selected}
+        registerInstance={registerInstance}
+        unregisterInstance={unregisterInstance}
+        onReady={handleReady}
+        onSelect={onSelect}
+      />
+    );
+  }
+
+  if (object.type === "camera") {
+    return (
+      <CameraObject
+        id={object.id}
+        position={IDENTITY}
+        rotation={IDENTITY}
+        fov={object.fov}
+        visible={object.visible}
+        selected={selected}
+        registerInstance={registerInstance}
+        unregisterInstance={unregisterInstance}
+        onReady={handleReady}
+        onSelect={onSelect}
+      />
+    );
+  }
+
+  return (
+    <MannequinObject
+      id={object.id}
+      type={object.type as "male" | "female" | "child"}
+      name={object.name}
+      position={IDENTITY}
+      rotation={IDENTITY}
+      scale={IDENTITY_SCALE}
+      posture={undefined}
+      visible={object.visible}
+      selected={selected}
+      registerInstance={registerInstance}
+      unregisterInstance={unregisterInstance}
+      onDefaultPosture={onDefaultPosture}
+      onReady={handleReady}
+      onSelect={onSelect}
+    />
+  );
+}
+
+/** Bare useFrame, no visuals: advances playback.elapsed while playing. */
+function PlaybackDriver() {
+  useFrame((_, delta) => {
+    const { playback, setElapsed, setPlaying } = useComposerStore.getState();
+    if (!playback.playing) return;
+    const t = Math.min(playback.duration, playback.elapsed + delta * playback.speed);
+    setElapsed(t);
+    if (t >= playback.duration) setPlaying(false);
+  });
+  return null;
+}
+
+interface KeyframePathProps {
+  object: SceneObject | null;
+  activeTool: ComposerTool;
+  selectedKeyframeId: string | null;
+  onSelectKeyframe: (id: string) => void;
+  onMoveKeyframe: (keyframeId: string, position: [number, number, number]) => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+}
+
+const MARKER_COLOR = "#4ade80";
+const MARKER_SELECTED_COLOR = "#f87171";
+
+/**
+ * The selected object's motion path: a polyline through its keyframes
+ * (editor chrome, layer 1) plus one small draggable sphere per keyframe —
+ * the viewport-space counterpart to Timeline.tsx's time-space markers.
+ *
+ * Built imperatively (THREE.Line + a THREE.Group of meshes managed by hand),
+ * matching JointGizmo/PoseControls' own manual-raycast pattern rather than
+ * R3F's JSX pointer events — R3F's built-in picking raycaster only tests
+ * layer 0 by default, so layer-1 meshes would otherwise never receive a
+ * pointer event.
+ *
+ * Dragging projects the pointer onto a ground-parallel plane at the
+ * keyframe's own height, so a drag moves the point across the floor, not
+ * toward/away from camera.
+ * ponytail: height (Y) is not draggable this way; add a vertical handle if
+ * users need to raise/lower a path point off the ground.
+ */
+function KeyframePath({ object, activeTool, selectedKeyframeId, onSelectKeyframe, onMoveKeyframe, onDragStart, onDragEnd }: KeyframePathProps) {
+  const { camera, gl, scene } = useThree();
+  const line = useRef<THREE.Line>(
+    new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: "#8b93a1" })),
+  ).current;
+  const group = useRef<THREE.Group>(new THREE.Group()).current;
+  const sphereGeometry = useRef(new THREE.SphereGeometry(0.06, 12, 12)).current;
+  const markers = useRef<Map<string, THREE.Mesh>>(new Map()).current;
+
+  useLayoutEffect(() => {
+    line.layers.set(1);
+    group.layers.set(1);
+    scene.add(line, group);
+    return () => {
+      scene.remove(line, group);
+    };
+  }, [line, group, scene]);
+
+  useLayoutEffect(() => {
+    const sorted = object ? [...object.keyframes].sort((a, b) => a.time - b.time) : [];
+
+    if (sorted.length < 2) {
+      line.visible = false;
+    } else {
+      line.visible = true;
+      line.geometry.setFromPoints(sorted.map((k) => new THREE.Vector3(...k.transform.position)));
+    }
+
+    const liveIds = new Set(sorted.map((k) => k.id));
+    for (const [id, mesh] of markers) {
+      if (liveIds.has(id)) continue;
+      group.remove(mesh);
+      (mesh.material as THREE.Material).dispose();
+      markers.delete(id);
+    }
+    for (const kf of sorted) {
+      let mesh = markers.get(kf.id);
+      if (!mesh) {
+        mesh = new THREE.Mesh(sphereGeometry, new THREE.MeshBasicMaterial());
+        mesh.layers.set(1);
+        mesh.userData.keyframeId = kf.id;
+        group.add(mesh);
+        markers.set(kf.id, mesh);
+      }
+      mesh.position.set(...kf.transform.position);
+      (mesh.material as THREE.MeshBasicMaterial).color.set(kf.id === selectedKeyframeId ? MARKER_SELECTED_COLOR : MARKER_COLOR);
+    }
+  }, [object, object?.keyframes, selectedKeyframeId, line, group, sphereGeometry, markers]);
+
+  const onSelectKeyframeRef = useRef(onSelectKeyframe);
+  onSelectKeyframeRef.current = onSelectKeyframe;
+  const onMoveKeyframeRef = useRef(onMoveKeyframe);
+  onMoveKeyframeRef.current = onMoveKeyframe;
+  const onDragStartRef = useRef(onDragStart);
+  onDragStartRef.current = onDragStart;
+  const onDragEndRef = useRef(onDragEnd);
+  onDragEndRef.current = onDragEnd;
+
+  useEffect(() => {
+    if (!object || activeTool !== "select") return;
+
+    const domElement = gl.domElement;
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    const plane = new THREE.Plane();
+    const dragPoint = new THREE.Vector3();
+    let draggingId: string | null = null;
+
+    function setPointer(event: PointerEvent) {
+      const rect = domElement.getBoundingClientRect();
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    }
+
+    function onPointerDown(event: PointerEvent) {
+      if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey) return;
+      setPointer(event);
+      raycaster.setFromCamera(pointer, camera);
+      const hit = raycaster.intersectObjects(Array.from(markers.values()), false)[0];
+      if (!hit) return;
+
+      const keyframeId = hit.object.userData.keyframeId as string;
+      onSelectKeyframeRef.current(keyframeId);
+      draggingId = keyframeId;
+      onDragStartRef.current();
+      const orbit = (camera as any).__orbitControls;
+      if (orbit) orbit.enabled = false;
+      plane.setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), hit.object.position);
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
+    }
+
+    function onPointerMove(event: PointerEvent) {
+      if (!draggingId) return;
+      setPointer(event);
+      raycaster.setFromCamera(pointer, camera);
+      if (!raycaster.ray.intersectPlane(plane, dragPoint)) return;
+      const mesh = markers.get(draggingId);
+      onMoveKeyframeRef.current(draggingId, [dragPoint.x, mesh?.position.y ?? 0, dragPoint.z]);
+    }
+
+    function onPointerUp() {
+      if (draggingId) onDragEndRef.current();
+      draggingId = null;
+      const orbit = (camera as any).__orbitControls;
+      if (orbit) orbit.enabled = true;
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    }
+
+    domElement.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      domElement.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      // Switching tool/selection mid-drag skips pointerup, which would
+      // otherwise leave orbit disabled and the history group open.
+      if (draggingId) {
+        onDragEndRef.current();
+        const orbit = (camera as any).__orbitControls;
+        if (orbit) orbit.enabled = true;
+      }
+    };
+  }, [object?.id, activeTool, camera, gl, markers]);
+
+  return null;
 }

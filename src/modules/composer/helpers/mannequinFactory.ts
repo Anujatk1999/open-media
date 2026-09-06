@@ -40,6 +40,28 @@ export interface CharacterOptions {
   type?: CharacterType;
 }
 
+let stageSilenced = false;
+
+/**
+ * mannequin-js's scene.js runs `initStage()` as a module-load side effect —
+ * merely importing any body class (even once) spins up a full-screen
+ * WebGLRenderer with an infinite `setAnimationLoop`, purely so the body
+ * constructor can call `scene.add(this)`. Nothing in this app reads that
+ * stage back. Left alone, it keeps a live WebGL context and a rAF loop
+ * running forever, competing with every thumbnail's own context/frame
+ * budget — worst right at the first-ever mannequin build, when this fires
+ * in the same tick as that first thumbnail's own Canvas is being created.
+ * Killed once, right after that first build makes the stage exist.
+ */
+async function silenceStrayStage(): Promise<void> {
+  if (stageSilenced) return;
+  stageSilenced = true;
+  const { getStage } = await import("mannequin-js/src/scene.js");
+  const stage = getStage();
+  stage.renderer?.setAnimationLoop(null);
+  stage.renderer?.dispose();
+}
+
 async function loadMannequin(type: CharacterType): Promise<THREE.Object3D> {
   let mannequin: THREE.Object3D;
   switch (type) {
@@ -74,6 +96,7 @@ export function createMannequin(
     const { type = "male" } = options;
 
     let mannequin = await loadMannequin(type);
+    await silenceStrayStage();
 
     // Remove the mannequin from any parent created internally.
     mannequin.parent?.remove(mannequin);

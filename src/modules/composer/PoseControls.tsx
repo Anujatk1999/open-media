@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
-import { useComposerStore } from "../../stores/composerStore";
 import { JOINT_CONFIGS } from "./helpers/jointConfig";
 
 /**
@@ -15,15 +14,17 @@ import { JOINT_CONFIGS } from "./helpers/jointConfig";
  * makes nested joints resolve correctly — a child hangs off its parent's
  * wrapper, so the deeper joint, listed later, overwrites the parent's tag.
  */
-export default function PoseControls() {
+interface PoseControlsProps {
+  isPoseMode: boolean;
+  figure: any | null;
+  onJointSelect: (key: string | null) => void;
+}
+
+export default function PoseControls({ isPoseMode, figure, onJointSelect }: PoseControlsProps) {
   const { camera, gl } = useThree();
-  const activeTool = useComposerStore((s) => s.activeTool);
-  const selectedId = useComposerStore((s) => s.selectedObjectId);
-  const objectInstances = useComposerStore((s) => s.objectInstances);
-  const selectJoint = useComposerStore((s) => s.selectJoint);
 
   useEffect(() => {
-    if (activeTool !== "pose" || !selectedId) return;
+    if (!isPoseMode || !figure) return;
 
     const domElement = gl.domElement;
     const raycaster = new THREE.Raycaster();
@@ -42,9 +43,6 @@ export default function PoseControls() {
       // which makes this independent of listener order.
       if ((camera as any).__jointGizmo?.axis) return;
 
-      const figure = objectInstances.get(selectedId!) as any;
-      if (!figure) return;
-
       const rect = domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -61,12 +59,12 @@ export default function PoseControls() {
       }
 
       const hit = raycaster.intersectObjects(meshes, false)[0];
-      selectJoint(hit ? (hit.object.userData.jointKey as string) : null);
+      onJointSelect(hit ? (hit.object.userData.jointKey as string) : null);
     }
 
     domElement.addEventListener("pointerdown", onPointerDown);
     return () => domElement.removeEventListener("pointerdown", onPointerDown);
-  }, [activeTool, selectedId, camera, gl, objectInstances, selectJoint]);
+  }, [isPoseMode, figure, camera, gl, onJointSelect]);
 
   return null;
 }

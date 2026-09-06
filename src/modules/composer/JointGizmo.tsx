@@ -1,10 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { useComposerStore } from "../../stores/composerStore";
 import { addRingArrowheads } from "./helpers/gizmoArrowheads";
-import { readPosture } from "./helpers/posture";
+import { readPosture, type Posture } from "./helpers/posture";
 
 /**
  * The rotation/scale gizmo for a single mannequin joint.
@@ -54,52 +53,77 @@ function highlightJoint(joint: THREE.Object3D) {
   return () => saved.forEach((color, m) => { m.color = color; });
 }
 
-export default function JointGizmo() {
-  const { camera, gl, scene } = useThree();
-  const activeTool = useComposerStore((s) => s.activeTool);
-  const selectedId = useComposerStore((s) => s.selectedObjectId);
-  const selectedJointKey = useComposerStore((s) => s.selectedJointKey);
-  const partScaleMode = useComposerStore((s) => s.partScaleMode);
-  const objectInstances = useComposerStore((s) => s.objectInstances);
-  const updatePosture = useComposerStore((s) => s.updateObjectPosture);
+interface JointGizmoProps {
+  isPoseMode: boolean;
+  figure: any | null;
+  jointKey: string | null;
+  scaleMode: boolean;
+  onPostureChange: (posture: Posture) => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+}
 
-  const isPoseMode = activeTool === "pose";
+export default function JointGizmo({ isPoseMode, figure, jointKey, scaleMode, onPostureChange, onDragStart, onDragEnd }: JointGizmoProps) {
+  const { camera, gl, scene } = useThree();
+
+  // Same fix as TransformGizmo.tsx: these are inline closures at every call
+  // site, so they get a new identity on every parent render — and every drag
+  // tick's `onObjectChange` triggers exactly that re-render via the store
+  // write it just made. With them in this effect's deps, the entire
+  // TransformControls instance was torn down and rebuilt mid-drag on the
+  // very first tick (`orbit.enabled` reset to true, the ring briefly
+  // vanishing), abandoning the still-held native drag. Refs let the
+  // effect read the latest callback without depending on its identity.
+  const onPostureChangeRef = useRef(onPostureChange);
+  onPostureChangeRef.current = onPostureChange;
+  const onDragStartRef = useRef(onDragStart);
+  onDragStartRef.current = onDragStart;
+  const onDragEndRef = useRef(onDragEnd);
+  onDragEndRef.current = onDragEnd;
 
   useEffect(() => {
-    if (!isPoseMode || !selectedId || !selectedJointKey) return;
+    if (!isPoseMode || !figure || !jointKey) return;
 
-    const figure = objectInstances.get(selectedId) as any;
-    const joint = figure?.[selectedJointKey];
+    const joint = figure[jointKey];
     if (!joint) return;
 
     const controls = new TransformControls(camera, gl.domElement);
     controls.setSpace("local");
     controls.setSize(0.45); // 0.8 is large enough to cage the figure
-    controls.setMode(partScaleMode ? "scale" : "rotate");
-    controls.attach(partScaleMode ? joint.image : joint);
+    controls.setMode(scaleMode ? "scale" : "rotate");
+    controls.attach(scaleMode ? joint.image : joint);
 
     const helper = controls.getHelper();
     scene.add(helper);
     // PoseControls reads this to tell a handle drag from a joint pick, the same
     // way TransformGizmo already finds OrbitControls.
     (camera as any).__jointGizmo = controls;
-    if (!partScaleMode) addRingArrowheads(controls);
+    if (!scaleMode) addRingArrowheads(controls);
+
+    // Layer 1 keeps this gizmo out of the Shot Preview's camera — see the
+    // matching traversal in TransformGizmo.tsx. `helper` also contains the
+    // invisible picker hitboxes and drag plane, and this control's own
+    // pick/drag raycasting (`getRaycaster()`, a single Raycaster shared by
+    // every TransformControls instance from three's own examples/jsm) tests
+    // layer 0 by default — without also enabling layer 1 there, the ring
+    // would render but never respond to a pointer again.
+    helper.traverse((o) => o.layers.set(1));
+    controls.getRaycaster().layers.enable(1);
 
     const clearHighlight = highlightJoint(joint);
 
     const orbit = (camera as any).__orbitControls;
-    const { beginHistoryGroup, endHistoryGroup } = useComposerStore.getState();
 
     // The whole ring drag is one undo step, not one per frame.
     let dragging = false;
-    const onDragStart = () => {
+    const onDown = () => {
       dragging = true;
-      beginHistoryGroup();
+      onDragStartRef.current?.();
       if (orbit) orbit.enabled = false;
     };
-    const onDragEnd = () => {
+    const onUp = () => {
       dragging = false;
-      endHistoryGroup();
+      onDragEndRef.current?.();
       if (orbit) orbit.enabled = true;
     };
 
@@ -108,20 +132,20 @@ export default function JointGizmo() {
       // Scale lives on the mesh, not in posture data, so only rotation is stored.
       // readPosture, not `.posture`, or a drag on an elbow/knee ring would be
       // thrown away by the round trip through the store and snap back.
-      if (!partScaleMode) updatePosture(selectedId, readPosture(figure));
+      if (!scaleMode) onPostureChangeRef.current(readPosture(figure));
     };
 
-    controls.addEventListener("mouseDown", onDragStart);
-    controls.addEventListener("mouseUp", onDragEnd);
+    controls.addEventListener("mouseDown", onDown);
+    controls.addEventListener("mouseUp", onUp);
     controls.addEventListener("objectChange", onObjectChange);
 
     return () => {
-      controls.removeEventListener("mouseDown", onDragStart);
-      controls.removeEventListener("mouseUp", onDragEnd);
+      controls.removeEventListener("mouseDown", onDown);
+      controls.removeEventListener("mouseUp", onUp);
       controls.removeEventListener("objectChange", onObjectChange);
       // Deselecting mid-drag skips mouseUp, which would otherwise leave the
       // history group open and swallow every later edit.
-      if (dragging) endHistoryGroup();
+      if (dragging) onDragEndRef.current?.();
       clearHighlight();
       (camera as any).__jointGizmo = null;
       controls.detach();
@@ -129,10 +153,7 @@ export default function JointGizmo() {
       controls.dispose();
       if (orbit) orbit.enabled = true;
     };
-  }, [
-    isPoseMode, selectedId, selectedJointKey, partScaleMode,
-    camera, gl, scene, objectInstances, updatePosture,
-  ]);
+  }, [isPoseMode, figure, jointKey, scaleMode, camera, gl, scene]);
 
   return null;
 }
