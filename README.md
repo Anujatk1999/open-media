@@ -88,6 +88,18 @@ Shortcuts are ignored while a text field is focused.
 
 **Capture Shot** saves the current Static-mode viewport as a timestamped PNG reference for your AI prompt.
 
+## AI / MCP
+
+Shot Composer ships a local [Model Context Protocol](https://modelcontextprotocol.io) server (`mcp/`) that lets an AI coding agent (Claude Code, Codex, Cursor, etc.) drive a running composer tab directly — build scenes, pose characters, frame shots, keyframe motion, and save results through the same actions the UI uses. It's local-first: no account, backend, or deployment involved.
+
+```bash
+cd mcp
+npm install
+npm start
+```
+
+See [`mcp/README.md`](mcp/README.md) for the full tool reference, connection instructions for various agents, and example prompts.
+
 ## Getting started
 
 Requires **Node.js 18+**.

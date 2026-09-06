@@ -1,0 +1,18 @@
+{
+  "name": "shot-composer-mcp",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Local MCP server that lets AI coding agents (Claude Code, Codex, etc.) drive a running Shot Composer tab.",
+  "type": "module",
+  "bin": {
+    "shot-composer-mcp": "./server.js"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "ws": "^8.18.0",
+    "zod": "^3.24.0"
+  }
+}

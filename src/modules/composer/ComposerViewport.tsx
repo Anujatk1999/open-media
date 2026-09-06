@@ -29,7 +29,7 @@ type WorkspaceApi = {
   zoomOut: () => void;
   fitAll: () => void;
   resetView: () => void;
-  captureShot: () => void;
+  captureShot: (opts?: { download?: boolean }) => Promise<string | null>;
   exportVideo: (onProgress?: (fraction: number) => void) => Promise<void>;
   setActiveTool: (tool: ComposerTool) => void;
   applyShot: (params: ShotParams) => void;
@@ -40,7 +40,8 @@ type WorkspaceApi = {
 export interface ComposerViewportAPI {
   setCameraView: (view: EditorView) => void;
   resetCamera: () => void;
-  captureShot: () => void;
+  /** Defaults to triggering the same PNG download as the toolbar button. Pass `{ download: false }` (used by the MCP bridge) to skip the download and get a base64 data URL back instead. */
+  captureShot: (opts?: { download?: boolean }) => Promise<string | null>;
   exportVideo: (onProgress?: (fraction: number) => void) => Promise<void>;
   zoomIn: () => void;
   zoomOut: () => void;
@@ -287,7 +288,7 @@ export const ComposerViewport = forwardRef<ComposerViewportAPI, ComposerViewport
   useImperativeHandle(ref, () => ({
     setCameraView: (view: EditorView) => api?.view?.(view),
     resetCamera: () => api?.resetView?.(),
-    captureShot: () => api?.captureShot?.(),
+    captureShot: (opts) => api?.captureShot?.(opts) ?? Promise.resolve(null),
     exportVideo: (onProgress) => api?.exportVideo?.(onProgress) ?? Promise.resolve(),
     zoomIn: () => api?.zoomIn?.(),
     zoomOut: () => api?.zoomOut?.(),
@@ -516,7 +517,8 @@ function Workspace({ grid, axes, ready, mode }: { grid: boolean; axes: boolean; 
         c.lookAt(0, 0.85, 0);
         controls.update();
       },
-      captureShot: () => {
+      captureShot: (opts) => {
+        const download = opts?.download ?? true;
         const renderer = gl;
         const wasLayer1Enabled = c.layers.isEnabled(1);
         const previousSelectedId = useComposerStore.getState().selectedObjectId;
@@ -532,20 +534,31 @@ function Workspace({ grid, axes, ready, mode }: { grid: boolean; axes: boolean; 
         flushSync(() => useComposerStore.getState().clearSelection());
 
         renderer.render(scene, c);
-        renderer.domElement.toBlob((blob: Blob | null) => {
-          if (wasLayer1Enabled) c.layers.enable(1);
-          if (previousSelectedId) flushSync(() => useComposerStore.getState().selectObject(previousSelectedId));
+        return new Promise<string | null>((resolve) => {
+          renderer.domElement.toBlob((blob: Blob | null) => {
+            if (wasLayer1Enabled) c.layers.enable(1);
+            if (previousSelectedId) flushSync(() => useComposerStore.getState().selectObject(previousSelectedId));
 
-          if (!blob) return;
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          const now = new Date();
-          const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-          link.download = `shot-${timestamp}.png`;
-          link.href = url;
-          link.click();
-          URL.revokeObjectURL(url);
-        }, 'image/png');
+            if (!blob) { resolve(null); return; }
+
+            if (!download) {
+              const reader = new FileReader();
+              reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+              reader.readAsDataURL(blob);
+              return;
+            }
+
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            const now = new Date();
+            const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+            link.download = `shot-${timestamp}.png`;
+            link.href = url;
+            link.click();
+            URL.revokeObjectURL(url);
+            resolve(null);
+          }, 'image/png');
+        });
       },
       exportVideo: (onProgress) => {
         if (exportingRef.current) return Promise.resolve();

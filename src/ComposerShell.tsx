@@ -14,6 +14,7 @@ import { saveSceneToLibrary } from './modules/motion/helpers/sceneLibrary';
 import { Timeline } from './modules/motion/Timeline';
 import { CameraInspectorPanel } from './modules/motion/CameraInspectorPanel';
 import { PoseLibraryPanel } from './modules/motion/PoseLibraryPanel';
+import { registerShotAPI, registerViewportAPI, startComposerBridge } from './modules/mcpBridge';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import type * as THREE from 'three';
@@ -161,6 +162,20 @@ function ComposerShell() {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
+  // Local-first MCP bridge: silently tries to reach a local MCP server (see
+  // mcp/README.md) so an AI agent can drive this tab. No-op if none is running.
+  useEffect(() => {
+    startComposerBridge();
+  }, []);
+
+  // shotParams/mode live as local state here, not in the Zustand store, so the
+  // bridge needs them handed over explicitly the same way ComposerViewport's
+  // imperative API is handed over via a ref (see the effect below).
+  useEffect(() => {
+    registerShotAPI({ getShotParams: () => shotParams, setShotParams, getMode: () => mode, setMode: handleSetMode });
+    return () => registerShotAPI(null);
+  }, [shotParams, mode, handleSetMode, setShotParams]);
+
   // Global editing/timeline shortcuts. Kept separate from ComposerViewport's
   // bare-letter tool shortcuts (m/r/s/p/c), which explicitly ignore Ctrl/Cmd,
   // so the two listeners never fight over a key. A selected keyframe takes
@@ -291,6 +306,11 @@ function ComposerShell() {
     if (!viewportReady) return;
     setScene(viewportRef.current?.getScene() ?? null);
     setMainCamera(viewportRef.current?.getCamera() ?? null);
+  }, [viewportReady]);
+
+  useEffect(() => {
+    registerViewportAPI(viewportReady ? viewportRef.current : null);
+    return () => registerViewportAPI(null);
   }, [viewportReady]);
 
   // Apply the preset straight to the main viewport's own camera whenever the
@@ -591,7 +611,7 @@ function ComposerShell() {
         />
         {/* Capture Shot button - top right on mobile */}
         <button className="capture-shot-btn capture-shot-btn-mobile"
-                onClick={viewportRef.current?.captureShot}
+                onClick={() => viewportRef.current?.captureShot()}
                 title="Capture Shot (PNG)">
           Capture Shot
         </button>
