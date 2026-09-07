@@ -137,6 +137,11 @@
   color: var(--text-faint);
 }
 
+.scene-item-active-camera {
+  color: #4ade80;
+  letter-spacing: 0.4px;
+}
+
 .scene-item-actions {
   display: flex;
   gap: 2px;

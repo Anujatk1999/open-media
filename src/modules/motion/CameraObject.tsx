@@ -10,6 +10,8 @@ interface CameraObjectProps {
   fov?: number;
   visible?: boolean;
   selected?: boolean;
+  /** The scene's current viewing/export camera — tinted distinctly from a merely-selected one. */
+  isActive?: boolean;
   registerInstance: (id: string, object: THREE.Object3D) => void;
   unregisterInstance: (id: string) => void;
   onReady?: (object: THREE.Object3D) => void;
@@ -38,7 +40,7 @@ interface CameraObjectProps {
  * on screen.
  */
 export default function CameraObject({
-  id, position, rotation, fov, visible = true, selected = false,
+  id, position, rotation, fov, visible = true, selected = false, isActive = false,
   registerInstance, unregisterInstance, onReady, onSelect,
 }: CameraObjectProps) {
   const cam = useRef(new THREE.PerspectiveCamera(fov ?? 10, 16 / 9, 0.1, 1000)).current;
@@ -115,8 +117,10 @@ export default function CameraObject({
   useLayoutEffect(() => {
     const body = bodyRef.current;
     if (!body) return;
-    (body.material as THREE.MeshBasicMaterial).color.set(selected ? 0x60a5fa : 0x2563eb);
-  }, [selected]);
+    // Selection (editing) wins visually over active (viewing) when both apply.
+    const color = selected ? 0x60a5fa : isActive ? 0x22c55e : 0x2563eb;
+    (body.material as THREE.MeshBasicMaterial).color.set(color);
+  }, [selected, isActive]);
 
   useFrame(() => {
     if (helperCam.fov !== cam.fov || helperCam.aspect !== cam.aspect) {

@@ -39,6 +39,7 @@ Shot Composer has one unified composer with two modes, switchable at any time fr
 - **Over-the-Shoulder (OTS)** — a real spatial camera relationship: the camera sits behind and slightly to one side of the selected character, near shoulder/head height, looking past them toward another character or the scene
 - **Elevation** — Eye Level, High, Low
 - **Composition** — Center, Left Third, Right Third, Upper Third, Lower Third, Negative Space
+- Works on any selected character or primitive (a bare camera can't be framed as a subject) — OTS auto-targets the nearest other character in the scene
 - Orbit/pan/dolly viewport navigation, grid toggle, and a Composition mode for arrow-key camera pedestal/truck adjustments
 
 ## Posing
@@ -50,8 +51,11 @@ Shot Composer has one unified composer with two modes, switchable at any time fr
 
 ## Motion and keyframes
 
-- Add cameras and animate character, object, and camera transforms (including rotation) with keyframes
+- Add cameras and animate character, object, and camera transforms (including rotation) with keyframes — any character, primitive, or camera can be independently keyframed and played back concurrently on the same shared timeline, via a "+ Keyframe" button or double-clicking the timeline
 - Timeline controls: play/pause, stop, scrub, speed, and duration
+- **Motion Shot Sequence** — chain Shot Combination framings (Wide → OTS → Medium → Close-up, etc.) into a cut list; each shot re-solves live against its target's current bounding box, so framing holds correct even while the target moves. Rendered through one dedicated cinematic camera, never a scene camera object
+- **Camera rigs** — `follow` (fixed offset from a moving target), `orbit` (360° sweep), or `shot` (continuously re-solved framing) — procedural per-camera behavior with no per-frame keyframing required
+- Multiple camera objects supported per scene, each independently keyframed; pick which one is the active/viewing camera for preview and export
 - Save a motion (keyframe track) for reuse from the Motion Library
 
 ## Saving your work
@@ -88,7 +92,8 @@ Shortcuts are ignored while a text field is focused.
 
 ## Export
 
-**Capture Shot** saves the current Static-mode viewport as a timestamped PNG reference for your AI prompt.
+- **Capture Shot** saves the current Static-mode viewport as a timestamped PNG reference for your AI prompt
+- **Export MP4** renders the full Motion timeline (Shot Sequence and/or keyframed objects) to a downloaded video file, in real time
 
 ## AI / MCP
 
@@ -151,12 +156,13 @@ src/
 │   ├── CompositionControls.tsx
 │   ├── cameraUtils.ts              # Framing and view presets
 │   └── helpers/                    # Joint config, mirroring, pose (de)serialization
-├── modules/motion/
-│   ├── Timeline.tsx                # Playback, scrubbing, duration, speed, keyframes
+├── modules/motion/                 # Motion mode: timeline, keyframes, shot sequence
+│   ├── Timeline.tsx                # Per-object keyframe track UI
+│   ├── ShotSequenceTimeline.tsx    # Motion Shot Sequence cut-list UI
 │   ├── CameraObject.tsx / CameraViewfinder.tsx / CameraInspectorPanel.tsx
 │   ├── PoseLibraryPanel.tsx
 │   ├── motionPresets.ts
-│   └── helpers/                    # Keyframe sampling, motion/scene library persistence
+│   └── helpers/                    # Keyframe sampling, camera rigs, shot sequence, motion/scene library persistence
 ├── modules/library/
 │   ├── LibraryPage.tsx             # Shell for library.html
 │   ├── calibration/                # Shot Library UI, thumbnails, shot solving
@@ -164,7 +170,7 @@ src/
 ├── modules/help/
 │   └── HelpPage.tsx                # Help Center content
 ├── stores/
-│   └── composerStore.ts            # Zustand scene state and undo history (50 steps)
+│   └── composerStore.ts            # Zustand scene state, undo history, keyframes, shot sequence
 └── types/
     └── mannequin-js.d.ts
 ```

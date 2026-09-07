@@ -20,6 +20,8 @@ export interface SceneLibraryEntry {
   duration: number;
   shotParams: ShotParams;
   objects: MotionObject[];
+  /** Which camera object (by id) was the active/viewing camera when saved. Null/absent if none was set. */
+  activeCameraId?: string | null;
 }
 
 const KEY = "motion.sceneLibrary.v1";
@@ -47,6 +49,7 @@ export function saveSceneToLibrary(
   objects: MotionObject[],
   duration: number,
   shotParams: ShotParams,
+  activeCameraId: string | null = null,
 ): SceneLibraryEntry {
   const entries = loadSceneLibrary();
   const slug = slugify(name) || "scene";
@@ -60,6 +63,7 @@ export function saveSceneToLibrary(
     duration,
     shotParams: structuredClone(shotParams),
     objects: structuredClone(objects),
+    activeCameraId,
   };
   writeSceneLibrary([...entries, entry]);
   return entry;

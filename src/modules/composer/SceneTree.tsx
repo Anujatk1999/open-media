@@ -20,6 +20,9 @@ interface SceneTreeProps {
   onAddPrimitive: (type: PrimitiveType) => void;
   /** Optional: only the motion editor passes this, so the main composer's SceneTree renders unchanged. */
   onAddCamera?: (type: "camera") => void;
+  /** Which camera is the active/viewing camera — motion editor only, drives the CAMERAS section's badge/button. */
+  activeCameraId?: string | null;
+  onSetActiveCamera?: (id: string) => void;
   onToggleVisibility?: (id: string) => void;
   onToggleLock?: (id: string) => void;
   onDuplicate?: (id: string) => void;
@@ -46,6 +49,8 @@ export default function SceneTree({
   onAddCharacter,
   onAddPrimitive,
   onAddCamera,
+  activeCameraId,
+  onSetActiveCamera,
   onToggleVisibility,
   onToggleLock,
   onDuplicate,
@@ -152,6 +157,8 @@ export default function SceneTree({
                       key={object.id}
                       object={object}
                       isSelected={isSelected}
+                      isActiveCamera={activeCameraId === object.id}
+                      onSetActiveCamera={onSetActiveCamera}
                       onSelect={onSelect}
                       onToggleVisibility={onToggleVisibility}
                       onToggleLock={onToggleLock}
@@ -171,6 +178,8 @@ export default function SceneTree({
 function SceneObjectItem({
   object,
   isSelected,
+  isActiveCamera,
+  onSetActiveCamera,
   onSelect,
   onToggleVisibility,
   onToggleLock,
@@ -179,6 +188,8 @@ function SceneObjectItem({
 }: {
   object: SceneObjectData;
   isSelected: boolean;
+  isActiveCamera?: boolean;
+  onSetActiveCamera?: (id: string) => void;
   onSelect: (id: string) => void;
   onToggleVisibility?: (id: string) => void;
   onToggleLock?: (id: string) => void;
@@ -193,6 +204,11 @@ function SceneObjectItem({
       <div className="scene-item-row">
         <span>{object.name}</span>
         <small>{object.type}</small>
+        {isActiveCamera && (
+          <small className="scene-item-active-camera" title="Active (viewing/export) camera">
+            ● Active
+          </small>
+        )}
         {object.locked && (
           <small className="scene-item-locked" title="Locked">
             🔒
@@ -207,6 +223,17 @@ function SceneObjectItem({
 
       {isSelected && (
         <div className="scene-item-actions">
+          {onSetActiveCamera && !isActiveCamera && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onSetActiveCamera(object.id);
+              }}
+              title="Make this the active/viewing camera"
+            >
+              Set Active
+            </button>
+          )}
           <button
             onClick={(e) => {
               e.stopPropagation();

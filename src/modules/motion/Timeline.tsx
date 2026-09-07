@@ -8,6 +8,7 @@ export function Timeline() {
   const duration = useComposerStore((s) => s.playback.duration);
   const elapsed = useComposerStore((s) => s.playback.elapsed);
   const selectKeyframe = useComposerStore((s) => s.selectKeyframe);
+  const selectObject = useComposerStore((s) => s.selectObject);
   const addKeyframe = useComposerStore((s) => s.addKeyframe);
   const deleteKeyframe = useComposerStore((s) => s.deleteKeyframe);
   const moveKeyframeTime = useComposerStore((s) => s.moveKeyframeTime);
@@ -44,14 +45,45 @@ export function Timeline() {
     window.addEventListener("pointerup", onUp);
   }
 
-  if (!object) {
-    return <div style={{ padding: 12, opacity: 0.6, fontSize: 13 }}>Select an object to see its keyframes.</div>;
-  }
+  const selectedKeyframe = object?.keyframes.find((k) => k.id === selectedKeyframeId);
 
-  const selectedKeyframe = object.keyframes.find((k) => k.id === selectedKeyframeId);
+  // Every object animates concurrently off the same shared timeline — this row
+  // is just a quick way to see which entities have a track and jump between
+  // them, not a per-track lane view. Only worth showing once there's more than
+  // one object to switch between.
+  const trackSwitcher = objects.length > 1 && (
+    <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+      {objects.map((o) => (
+        <button
+          key={o.id}
+          onClick={() => selectObject(o.id)}
+          title={`${o.keyframes.length} keyframe(s)`}
+          style={{
+            fontSize: 11, padding: "3px 8px", borderRadius: 4,
+            border: o.id === selectedObjectId ? "1px solid #4ade80" : "1px solid var(--border)",
+            background: o.id === selectedObjectId ? "#1c2b20" : "transparent",
+            color: o.id === selectedObjectId ? "#4ade80" : "inherit",
+            opacity: o.keyframes.length > 1 ? 1 : 0.6,
+          }}
+        >
+          {o.type === "camera" ? "🎥 " : ""}{o.name} ({o.keyframes.length})
+        </button>
+      ))}
+    </div>
+  );
+
+  if (!object) {
+    return (
+      <div style={{ padding: "14px 24px", background: "var(--panel)", borderTop: "1px solid var(--border)" }}>
+        {trackSwitcher}
+        <div style={{ opacity: 0.6, fontSize: 13 }}>Select an object to see its keyframes.</div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: "14px 24px", background: "var(--panel)", borderTop: "1px solid var(--border)" }}>
+      {trackSwitcher}
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
         <span style={{ fontSize: 12, opacity: 0.7 }}>{object.name ?? object.id} — {object.keyframes.length} keyframe(s)</span>
         {selectedKeyframe && object.keyframes.length > 1 && (

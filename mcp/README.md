@@ -98,6 +98,8 @@ Codex's config format has changed before and may again — if this doesn't work,
 
 > "Capture the current shot and show it to me."
 
+> "Build a 12-second shot sequence on the first character: wide, then OTS on the second character, then medium, then close-up — 3 seconds each — and export it as a video."
+
 ## Tools
 
 Scene inspection:
@@ -138,12 +140,49 @@ Shot framing & camera:
 
 | Tool | Params | Description |
 | --- | --- | --- |
-| `set_shot` | `shotSize?, angle?, elevation?, composition?` | Configure and apply the shot camera. Requires a selected character; `angle: "ots"` needs a second character already in the scene |
+| `set_shot` | `shotSize?, angle?, elevation?, composition?` | Configure and apply the shot camera. Requires a selected object (any type except camera — mannequin or primitive); `angle: "ots"` needs a second character already in the scene |
 | `set_mode` | `mode` | Switch between `static` and `motion` |
 | `capture_shot` | `download?` | Render the current camera view — returns a PNG image by default, or triggers a file download if `download: true` |
 | `set_camera_fov` | `id, fov` | Set a camera object's field of view |
+| `set_active_camera` | `id` | Choose which camera object is the active/viewing camera (video export, camera preview). A scene can hold multiple cameras, each with its own keyframe track; this only picks which one is "live" |
+| `set_camera_rig` | `id, rig` | Set/clear a procedural camera rig — `follow`, `orbit`, or `shot` (see below). `rig: { type: "none" }` clears it |
+| `export_video` | — | Render the Motion timeline through to a downloaded video file, same as the in-app Export Video button. Plays the full duration in real time. Exports through the Shot Sequence's dedicated camera if one exists, otherwise requires a camera set active |
+
+### Procedural camera rigs
+
+A camera's keyframe track is one valid way to animate it — hand-placed, frame by frame. A **rig** is the other: a procedural behavior, set once, that recalculates the camera's position/orientation every frame from its target's current (independently animated) state, using vector/lookAt math rather than hand-authored rotation keyframes. Setting a rig never touches the camera's own keyframes, and a rig is fully compatible with them existing (the rig simply wins for that frame). `set_camera_rig({ id, rig })` accepts one of:
+
+| `rig.type` | Fields | Behavior |
+| --- | --- | --- |
+| `follow` | `targetId, offset: [x,y,z]` | Hold a fixed world-space offset from `targetId`, always facing it |
+| `orbit` | `targetId, radius, height, startAngleDeg, endAngleDeg, duration, startTime?` | Circle `targetId` at `radius`/`height`, sweeping the angle over `duration` seconds starting at `startTime` (default 0) on the shared timeline; holds at the end angle after. This is the 360°-orbit case: `startAngleDeg: 0, endAngleDeg: 360` |
+| `shot` | `targetId, secondaryTargetId?, shotSize, angle, elevation, composition` | Continuously re-solves one of the existing shot presets (same enums as `set_shot`/`list_shot_presets`) against `targetId`'s live bounding box every frame, maintaining the framing while the target moves; `secondaryTargetId` is the "other" character an `ots` angle looks past the target toward, same foreground→camera→target relationship as the static OTS shot |
+| `none` | — | Clear any rig, back to free rotation from the camera's own track |
+
+### Shot sequences
+
+The Motion Shot Sequence is a cut list of framings — store-level data, not a camera rig or camera object. It drives one dedicated cinematic camera used only for Motion preview/export; it never creates, selects, or touches any camera object, and never affects the editor viewport camera. Build one with `add_shot_segment` (repeat to append more shots), inspect it with `get_shot_sequence`, and adjust it with `update_shot_segment`/`remove_shot_segment`:
+
+| Tool | Params | Description |
+| --- | --- | --- |
+| `add_shot_segment` | `targetId, secondaryTargetId?, shotSize, angle, elevation, composition, duration?` | Append one shot to the sequence, holding `duration` seconds (default 3) |
+| `get_shot_sequence` | — | Read the sequence — every segment plus its derived start time and the sequence's total duration |
+| `update_shot_segment` | `segmentId, targetId?, secondaryTargetId?, shotSize?, angle?, elevation?, composition?, duration?` | Patch one segment; any field omitted keeps its current value |
+| `remove_shot_segment` | `segmentId` | Remove one segment |
+
+For example, "create a 12-second sequence with Wide → OTS → Medium → Close-up" is four `add_shot_segment` calls, each defaulting to 3 seconds.
 
 Keyframes & motion:
+
+Every object (character, primitive, or camera) has its own independent keyframe
+track on the same shared timeline/duration, evaluated every frame during both
+playback and MP4 export — animating a character and a camera concurrently
+(e.g. a character walking A→B while a camera independently moves) is just
+calling `add_keyframe`/`set_transform` for each object's own `id`; their tracks
+never overwrite each other, and `set_playback`/`set_duration` drive both at
+once. For a camera that should track/follow/orbit a moving target, or hold a
+shot preset on it, without keyframing every frame, use `set_camera_rig`
+instead — see above.
 
 | Tool | Params | Description |
 | --- | --- | --- |
@@ -174,8 +213,8 @@ Character posture is mannequin.js's own opaque, versioned format (`{ version, da
 - Only one Shot Composer tab can be bridged at a time.
 - The Community library tab is a "coming soon" placeholder in the app itself — `list_library` reflects that (no community entries).
 - UI-only interactions with no underlying store action aren't exposed: composition-mode arrow-key nudging, live gizmo dragging, mirroring a pose across the body, and "Part Scale" mode.
-- Video export (`exportVideo` on `ComposerViewportAPI`) isn't wrapped as a tool yet — capture is still image-only. Adding it would follow the exact same pattern as `capture_shot`.
-- `capture_shot` renders through the live, on-screen camera (whatever is currently framed), not an offscreen/headless render.
+- `capture_shot`/`export_video` render through the live, on-screen camera (whatever is currently framed), not an offscreen/headless render — `export_video` also runs in real time (a 12-second timeline takes ~12 seconds to record).
+- There is no "load a saved scene back into the live session" — `save_scene`/`save_pose`/`save_motion` persist to the library, but nothing currently restores a library scene into `composerStore`'s live objects (this is a pre-existing gap in the app itself, not specific to shot sequencing).
 
 ## Troubleshooting
 

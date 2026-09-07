@@ -7,11 +7,14 @@ import { describeShot, type ShotLibraryEntry } from './modules/library/calibrati
 import { getCompositionPreset, DEFAULT_COMPOSITION_PRESET } from './modules/library/calibration/compositionPresets';
 import { SHOT_SIZE_OPTIONS, ANGLE_OPTIONS, ELEVATION_OPTIONS } from './modules/library/calibration/shotAxes';
 import type { ShotParams } from './modules/library/calibration/shotSolver';
-import { useComposerStore, selectCanPose } from './stores/composerStore';
+import { useComposerStore, selectCanPose, selectCanComposeShot } from './stores/composerStore';
+import type { ShotSegment } from './stores/composerStore';
 import { loadPoseLibrary, saveCustomPose } from './modules/composer/helpers/poseLibrary';
 import { loadMotionLibrary, isMotionCompatible, saveMotionToLibrary } from './modules/motion/helpers/motionLibrary';
 import { saveSceneToLibrary } from './modules/motion/helpers/sceneLibrary';
 import { Timeline } from './modules/motion/Timeline';
+import { ShotSequenceTimeline } from './modules/motion/ShotSequenceTimeline';
+import { sequenceDuration } from './modules/motion/helpers/shotSequence';
 import { CameraInspectorPanel } from './modules/motion/CameraInspectorPanel';
 import { PoseLibraryPanel } from './modules/motion/PoseLibraryPanel';
 import { registerShotAPI, registerViewportAPI, startComposerBridge } from './modules/mcpBridge';
@@ -50,54 +53,29 @@ function parseIncomingShot(search: URLSearchParams): { params: ShotParams; addTo
   };
 }
 
-function TransportBar({ playing, elapsed, speed, duration, onPlay, onPause, onStop, onScrub, onSpeedChange, onDurationChange }: {
+/** Compact Play/Pause/Stop + scrub bar — deliberately separate from the Shot Combination controls, and small enough to sit directly above the timeline. */
+function TransportBar({ playing, elapsed, duration, onPlay, onPause, onStop, onScrub }: {
   playing: boolean;
   elapsed: number;
-  speed: number;
   duration: number;
   onPlay: () => void;
   onPause: () => void;
   onStop: () => void;
   onScrub: (t: number) => void;
-  onSpeedChange: (v: number) => void;
-  onDurationChange: (v: number) => void;
 }) {
   return (
-    <div style={{
-      padding: "14px 24px", background: "var(--panel)", borderTop: "1px solid var(--border)",
-      display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap",
-    }}>
-      <div style={{ display: "flex", gap: 6 }}>
-        <button onClick={onPlay} disabled={playing}>Play</button>
-        <button onClick={onPause} disabled={!playing}>Pause</button>
-        <button onClick={onStop}>Stop</button>
+    <div className="transport-bar">
+      <div className="transport-bar-buttons">
+        <button onClick={onPlay} disabled={playing} title="Play">▶</button>
+        <button onClick={onPause} disabled={!playing} title="Pause">⏸</button>
+        <button onClick={onStop} title="Stop">⏹</button>
       </div>
-      <label style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 260 }}>
-        <span style={{ fontSize: 12, opacity: 0.7, width: 90 }}>
-          {elapsed.toFixed(2)}s / {duration.toFixed(1)}s
-        </span>
-        <input
-          type="range" min={0} max={duration} step={0.01} value={Math.min(elapsed, duration)}
-          onChange={(e) => onScrub(Number(e.target.value))}
-          style={{ flex: 1 }}
-        />
-      </label>
-      <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        Speed
-        <input
-          type="number" min={0.1} max={3} step={0.1} value={speed}
-          onChange={(e) => onSpeedChange(Number(e.target.value))}
-          style={{ width: 56 }}
-        />
-      </label>
-      <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        Duration
-        <input
-          type="number" min={1} max={30} step={0.5} value={duration}
-          onChange={(e) => onDurationChange(Number(e.target.value))}
-          style={{ width: 56 }}
-        />
-      </label>
+      <span className="transport-bar-time">{elapsed.toFixed(2)}s / {duration.toFixed(1)}s</span>
+      <input
+        type="range" min={0} max={duration} step={0.01} value={Math.min(elapsed, duration)}
+        onChange={(e) => onScrub(Number(e.target.value))}
+        className="transport-bar-scrub"
+      />
     </div>
   );
 }
@@ -105,9 +83,12 @@ function TransportBar({ playing, elapsed, speed, duration, onPlay, onPause, onSt
 function ComposerShell() {
   const objects = useComposerStore(s => s.objects);
   const selectedId = useComposerStore(s => s.selectedObjectId);
+  const activeCameraId = useComposerStore(s => s.activeCameraId);
+  const setActiveCamera = useComposerStore(s => s.setActiveCamera);
   const activeTool = useComposerStore(s => s.activeTool);
   const setActiveTool = useComposerStore(s => s.setActiveTool);
   const canPose = useComposerStore(selectCanPose);
+  const canComposeShot = useComposerStore(selectCanComposeShot);
   const addObject = useComposerStore(s => s.addObject);
   const selectObject = useComposerStore(s => s.selectObject);
   const toggleObjectVisibility = useComposerStore(s => s.toggleObjectVisibility);
@@ -118,6 +99,9 @@ function ComposerShell() {
   const updateObjectTransform = useComposerStore(s => s.updateObjectTransform);
   const objectInstances = useComposerStore(s => s.objectInstances);
   const applyMotionPreset = useComposerStore(s => s.applyMotionPreset);
+  const addShotSegment = useComposerStore(s => s.addShotSegment);
+  const shotSequence = useComposerStore(s => s.shotSequence);
+  const updateShotSegment = useComposerStore(s => s.updateShotSegment);
   const playing = useComposerStore(s => s.playback.playing);
   const elapsed = useComposerStore(s => s.playback.elapsed);
   const speed = useComposerStore(s => s.playback.speed);
@@ -148,6 +132,8 @@ function ComposerShell() {
   const [shotParams, setShotParams] = useState<ShotParams>(
     () => parseIncomingShot(searchParams)?.params ?? DEFAULT_SHOT_PARAMS,
   );
+  const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null);
+  const [timelineCollapsed, setTimelineCollapsed] = useState(false);
 
   const [scene, setScene] = useState<THREE.Scene | null>(null);
   const [mainCamera, setMainCamera] = useState<THREE.Camera | null>(null);
@@ -316,17 +302,31 @@ function ComposerShell() {
   // Apply the preset straight to the main viewport's own camera whenever the
   // shot controls or selection change. Deliberately excludes `objects`: a
   // manual Move/Rotate/Scale/Pose edit changes that store slice but not these
-  // four values, so it never gets fought by a re-applied preset. Static mode
-  // requires a posable (mannequin) selection, same as before; Motion mode
-  // applies to any selection (a cinematic camera included) or none.
+  // four values, so it never gets fought by a re-applied preset. Runs in both
+  // modes so the viewport and Shot Preview always reflect the drafted shot;
+  // in Motion, playback/export still go through the separate sequence camera.
   useEffect(() => {
-    if (!viewportReady || (mode === 'static' && !canPose)) return;
+    if (!viewportReady || (mode === 'static' && !canComposeShot)) return;
     viewportRef.current?.applyShot(shotParams);
-  }, [viewportReady, mode, canPose, selectedId, shotParams]);
+  }, [viewportReady, mode, canComposeShot, selectedId, shotParams]);
+
+  // A segment removed (or the sequence cleared) out from under an in-progress
+  // edit must drop back to "drafting a new shot" rather than silently keep
+  // pointing at a segment id that no longer exists.
+  useEffect(() => {
+    if (selectedSegmentId && !shotSequence.some(s => s.id === selectedSegmentId)) {
+      setSelectedSegmentId(null);
+    }
+  }, [selectedSegmentId, shotSequence]);
 
   const selected = objects.find(c => c.id === selectedId) ?? null;
   const cineCamInstance = selected?.type === 'camera' ? (objectInstances.get(selected.id) as THREE.Camera | undefined) ?? null : null;
   const selectedPosture = selected?.posture ?? selected?.defaultPosture ?? null;
+
+  const editingSegmentIndex = selectedSegmentId ? shotSequence.findIndex(s => s.id === selectedSegmentId) : -1;
+  const editingSegmentLabel = editingSegmentIndex >= 0
+    ? `#${editingSegmentIndex + 1} ${objects.find(o => o.id === shotSequence[editingSegmentIndex].targetId)?.name ?? '(deleted)'}`
+    : null;
 
   function handleAddCurrentShot() {
     const entry = describeShot(shotParams);
@@ -335,6 +335,42 @@ function ComposerShell() {
 
   function handleSelectFromStrip(entry: ShotLibraryEntry) {
     setShotParams(entry.params);
+  }
+
+  // "ots" looks past the current selection at whichever other character is in
+  // the scene — the same auto-pick ComposerViewport's applyShot already does
+  // for the live Static-mode camera, just resolved as object ids here instead
+  // of live roots (a ShotSegment stores ids, evaluated fresh every frame).
+  function resolveSecondaryTargetId(): string | null {
+    if (!selectedId || shotParams.angle !== 'ots') return null;
+    const isCharacterType = (t: SceneObject['type']) => t === 'male' || t === 'female' || t === 'child';
+    return objects.find(o => o.id !== selectedId && isCharacterType(o.type))?.id ?? null;
+  }
+
+  function handleAddToTimeline() {
+    if (!selectedId) return;
+    addShotSegment({ targetId: selectedId, secondaryTargetId: resolveSecondaryTargetId(), shotParams });
+  }
+
+  function handleUpdateSegment() {
+    if (!selectedId || !selectedSegmentId) return;
+    updateShotSegment(selectedSegmentId, { targetId: selectedId, secondaryTargetId: resolveSecondaryTargetId(), shotParams });
+  }
+
+  // Clicking a Shot Sequence card (see ShotSequenceTimeline) both scrubs the
+  // timeline to that segment's own start time and loads its framing back into
+  // the panel, so editing a shot always starts from what the timeline itself
+  // says is true at that instant rather than whatever was last on screen.
+  function handleSelectSegment(segment: ShotSegment, start: number) {
+    setSelectedSegmentId(segment.id);
+    setShotParams(segment.shotParams);
+    selectObject(segment.targetId);
+    setPlaying(false);
+    setElapsed(start);
+  }
+
+  function handleCancelEditSegment() {
+    setSelectedSegmentId(null);
   }
 
   function handleSetMode(next: ComposerMode) {
@@ -357,7 +393,7 @@ function ComposerShell() {
     }
     const name = window.prompt('Name this scene for the library:');
     if (!name?.trim()) return;
-    saveSceneToLibrary(name, objects, duration, shotParams);
+    saveSceneToLibrary(name, objects, duration, shotParams, activeCameraId);
     window.alert(`Saved "${name.trim()}" to the scene library.`);
   }
 
@@ -488,6 +524,8 @@ function ComposerShell() {
               onAddCharacter={(type: CharacterType) => addObject(type)}
               onAddPrimitive={(type: PrimitiveType) => addObject(type)}
               onAddCamera={mode === 'motion' ? (type) => addObject(type) : undefined}
+              activeCameraId={mode === 'motion' ? activeCameraId : undefined}
+              onSetActiveCamera={mode === 'motion' ? setActiveCamera : undefined}
               onToggleVisibility={toggleObjectVisibility}
               onToggleLock={toggleObjectLock}
               onDuplicate={duplicateObject}
@@ -507,7 +545,6 @@ function ComposerShell() {
             <ComposerViewport
               ref={viewportRef}
               onSceneReady={() => setViewportReady(true)}
-              shotParams={shotParams}
               mode={mode}
               grid={grid}
               compositionMode={compositionMode}
@@ -534,7 +571,11 @@ function ComposerShell() {
                 onChange={setShotParams}
                 scene={scene}
                 camera={mainCamera}
-                canCompose={canPose}
+                canCompose={canComposeShot}
+                onAddToTimeline={mode === 'motion' ? handleAddToTimeline : undefined}
+                editingSegmentLabel={mode === 'motion' ? editingSegmentLabel : null}
+                onUpdateSegment={handleUpdateSegment}
+                onCancelEdit={handleCancelEditSegment}
               />
             )}
             {rightTab === 'object' && (
@@ -571,24 +612,51 @@ function ComposerShell() {
               onSelect={handleSelectFromStrip}
               onRemove={(id) => setSequence(prev => prev.filter(s => s.id !== id))}
               headerExtra={
-                <button type="button" className="composer-add-shot-btn" onClick={handleAddCurrentShot} disabled={!canPose}>
+                <button type="button" className="composer-add-shot-btn" onClick={handleAddCurrentShot} disabled={!canComposeShot}>
                   + Add Current Shot
                 </button>
               }
             />
           ) : (
-            <>
-              <Timeline />
-              <TransportBar
-                playing={playing} elapsed={elapsed} speed={speed} duration={duration}
-                onPlay={() => { setElapsed(elapsed >= duration ? 0 : elapsed); setPlaying(true); }}
-                onPause={() => setPlaying(false)}
-                onStop={() => { setPlaying(false); setElapsed(0); }}
-                onScrub={(t) => { setPlaying(false); setElapsed(t); }}
-                onSpeedChange={setSpeed}
-                onDurationChange={(d) => { setDuration(d); setElapsed(Math.min(elapsed, d)); }}
-              />
-            </>
+            <div className={`motion-timeline-panel${timelineCollapsed ? ' collapsed' : ''}`}>
+              <div className="motion-timeline-header">
+                <button
+                  type="button"
+                  className="timeline-collapse-btn"
+                  onClick={() => setTimelineCollapsed(v => !v)}
+                  title={timelineCollapsed ? 'Expand timeline' : 'Collapse timeline'}
+                  aria-label={timelineCollapsed ? 'Expand timeline' : 'Collapse timeline'}
+                >
+                  {timelineCollapsed ? '▲' : '▼'}
+                </button>
+                <TransportBar
+                  playing={playing} elapsed={elapsed} duration={duration}
+                  onPlay={() => { setElapsed(elapsed >= duration ? 0 : elapsed); setPlaying(true); }}
+                  onPause={() => setPlaying(false)}
+                  onStop={() => { setPlaying(false); setElapsed(0); }}
+                  onScrub={(t) => { setPlaying(false); setElapsed(t); }}
+                />
+                <span className="motion-timeline-summary">
+                  {shotSequence.length} shot{shotSequence.length === 1 ? '' : 's'} · {sequenceDuration(shotSequence).toFixed(1)}s
+                </span>
+              </div>
+              {!timelineCollapsed && (
+                <div className="motion-timeline-body">
+                  <ShotSequenceTimeline selectedSegmentId={selectedSegmentId} onSelectSegment={handleSelectSegment} />
+                  <label className="motion-timeline-settings">
+                    Speed
+                    <input type="number" min={0.1} max={3} step={0.1} value={speed} onChange={(e) => setSpeed(Number(e.target.value))} />
+                    Total duration
+                    <input type="number" min={1} max={30} step={0.5} value={duration} onChange={(e) => { setDuration(Number(e.target.value)); setElapsed(Math.min(elapsed, Number(e.target.value))); }} />
+                    s
+                  </label>
+                  <details className="motion-object-keyframes">
+                    <summary>Object Keyframes</summary>
+                    <Timeline />
+                  </details>
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -603,7 +671,6 @@ function ComposerShell() {
         <ComposerViewport
           ref={viewportRef}
           onSceneReady={() => setViewportReady(true)}
-          shotParams={shotParams}
           mode="static"
           grid={grid}
           compositionMode={compositionMode}

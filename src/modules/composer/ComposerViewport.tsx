@@ -5,7 +5,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffec
 import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsType } from 'three-stdlib';
 import { frameObject, getObjectBounds, setEditorView, type EditorView } from './cameraUtils';
-import { useComposerStore, type ComposerTool, type SceneObject } from '../../stores/composerStore';
+import { useComposerStore, resolveRenderCamera, type ComposerTool, type SceneObject } from '../../stores/composerStore';
 import { sampleTrack } from '../motion/helpers/sampleTrack';
 import { writePosture, type Posture } from './helpers/posture';
 import MannequinObject from './MannequinObject';
@@ -18,6 +18,7 @@ import JointGizmo from './JointGizmo';
 import { CompositionControls, CompositionController, type CompositionCommand, type CompositionDirection } from './CompositionControls';
 import { removeMannequinCanvases } from './helpers/mannequinFactory';
 import { getCharacterAnchors, solveShot, type CharacterAnchors, type ShotParams } from '../library/calibration/shotSolver';
+import { evaluateCameraRig, evaluateShotSequence, type RigLookups } from '../motion/helpers/cameraRig';
 
 export type ComposerMode = 'static' | 'motion';
 
@@ -35,6 +36,7 @@ type WorkspaceApi = {
   applyShot: (params: ShotParams) => void;
   getScene: () => THREE.Scene | null;
   getCamera: () => THREE.Camera | null;
+  getCineCamera: () => THREE.Camera | null;
 };
 
 export interface ComposerViewportAPI {
@@ -52,6 +54,8 @@ export interface ComposerViewportAPI {
   getScene: () => THREE.Scene | null;
   /** The live main-viewport camera, so the Shot Preview can mirror its exact pose every frame instead of keeping independent camera state. */
   getCamera: () => THREE.Camera | null;
+  /** The one dedicated runtime camera driven by the store's shotSequence — never a scene camera object. Null-safe to call at any time; returns the camera regardless of whether a sequence is currently populated. */
+  getCineCamera: () => THREE.Camera | null;
 }
 
 /**
@@ -87,6 +91,10 @@ const DPR: [number, number] = [1, 2];
 const PRIMITIVE_TYPES = ["cube", "plane", "cylinder", "sphere", "capsule", "cone", "torus"];
 const IDENTITY: [number, number, number] = [0, 0, 0];
 const IDENTITY_SCALE: [number, number, number] = [1, 1, 1];
+
+/** Matches the default FOV/aspect a manually-added camera object gets (see addObject in composerStore.ts / CameraObject.tsx) — keeps the dedicated sequence camera's framing/export aspect consistent with those. */
+const SEQUENCE_CAMERA_FOV_DEG = 10;
+const SEQUENCE_CAMERA_ASPECT = 16 / 9;
 
 /**
  * Priority order for MediaRecorder output: real MP4/H.264 first — confirmed
@@ -207,8 +215,6 @@ function exportMotionVideo(
 export interface ComposerViewportProps {
   /** Fires once the workspace's imperative API (applyShot, getScene, getCamera, ...) is actually wired up — mirrors the Shot Builder's own onSceneReady pattern, since api starts out null for a render or two after mount. */
   onSceneReady?: () => void;
-  /** The active shot framing, for "Save Scene" — the same value ShotBuilderPanel edits. */
-  shotParams: ShotParams;
   mode: ComposerMode;
   /** Grid/Composition-guide display are controlled from the top action bar (ComposerShell) so their buttons live in one place rather than duplicating state. */
   grid: boolean;
@@ -216,7 +222,7 @@ export interface ComposerViewportProps {
   onToggleComposition: () => void;
 }
 
-export const ComposerViewport = forwardRef<ComposerViewportAPI, ComposerViewportProps>(function ComposerViewport({ onSceneReady, shotParams, mode, grid, compositionMode, onToggleComposition }, ref) {
+export const ComposerViewport = forwardRef<ComposerViewportAPI, ComposerViewportProps>(function ComposerViewport({ onSceneReady, mode, grid, compositionMode, onToggleComposition }, ref) {
   const [api, setApi] = useState<WorkspaceApi | null>(null);
   const [axes] = useState(false);
   const [compositionCommand, setCompositionCommand] = useState<CompositionCommand | null>(null);
@@ -298,6 +304,7 @@ export const ComposerViewport = forwardRef<ComposerViewportAPI, ComposerViewport
     applyShot: (params) => api?.applyShot?.(params),
     getScene: () => api?.getScene?.() ?? null,
     getCamera: () => api?.getCamera?.() ?? null,
+    getCineCamera: () => api?.getCineCamera?.() ?? null,
   }), [api]);
 
   // `api` starts out null and is only set once Workspace's own mount effect runs
@@ -364,8 +371,8 @@ export const ComposerViewport = forwardRef<ComposerViewportAPI, ComposerViewport
           Capture Shot
         </button>
       ) : (
-        <button className="capture-shot-btn" onClick={handleExportVideo} disabled={exporting} title="Export the full timeline as a video">
-          {exporting ? `Exporting… ${Math.round(exportProgress * 100)}%` : 'Download'}
+        <button className="capture-shot-btn export-btn" onClick={handleExportVideo} disabled={exporting} title="Export the complete Shot Sequence as MP4">
+          {exporting ? `Exporting… ${Math.round(exportProgress * 100)}%` : 'Export MP4'}
         </button>
       )}
       <CompositionControls enabled={compositionMode} onMove={handleCompositionMove} />
@@ -380,6 +387,7 @@ function Workspace({ grid, axes, ready, mode }: { grid: boolean; axes: boolean; 
 
   const objects = useComposerStore(s => s.objects);
   const selectedId = useComposerStore(s => s.selectedObjectId);
+  const activeCameraId = useComposerStore(s => s.activeCameraId);
   const selectObject = useComposerStore(s => s.selectObject);
   const clearSelection = useComposerStore(s => s.clearSelection);
   const activeTool = useComposerStore(s => s.activeTool);
@@ -406,6 +414,14 @@ function Workspace({ grid, axes, ready, mode }: { grid: boolean; axes: boolean; 
   const rootsRef = useRef<Map<string, THREE.Object3D>>(new Map());
   const selectedRootRef = useRef<THREE.Object3D | null>(null);
   const framedIds = useRef(new Set<string>());
+
+  // The ONE dedicated runtime camera for the store's shotSequence — never a
+  // scene camera object, never added to `objects`, so selecting/editing shot
+  // combinations can never create or leave behind a persistent camera. Not
+  // part of the R3F scene graph either (no parent), which is exactly what
+  // three.js's own renderer expects for a camera it should still update the
+  // world matrix of on render (see CinematicSequenceCamera/exportVideo below).
+  const cineCameraRef = useRef(new THREE.PerspectiveCamera(SEQUENCE_CAMERA_FOV_DEG, SEQUENCE_CAMERA_ASPECT, 0.1, 1000)).current;
 
   /**
    * Puts a newly added object on screen at a usable size, seen head-on. See
@@ -564,13 +580,23 @@ function Workspace({ grid, axes, ready, mode }: { grid: boolean; axes: boolean; 
         if (exportingRef.current) return Promise.resolve();
         exportingRef.current = true;
 
-        // If a cinematic camera object exists, export renders through it via
-        // its own offscreen renderer — the interactive canvas/camera are
-        // never swapped, so nothing here touches `gl` or the on-screen view.
-        const cameraObj = useComposerStore.getState().objects.find(o => o.type === "camera");
-        const cineCam = cameraObj ? (rootsRef.current.get(cameraObj.id) as THREE.PerspectiveCamera | undefined) : undefined;
+        // A populated shot sequence always wins: it renders through the one
+        // dedicated cinematic camera, offscreen, so the interactive
+        // canvas/camera are never swapped and export can never land on a
+        // different camera than what the sequence was actually built from.
+        // Otherwise fall back to a manually-chosen/created camera object
+        // (resolveRenderCamera), and finally the interactive viewport camera.
+        const { objects: currentObjects, activeCameraId, shotSequence } = useComposerStore.getState();
+        let renderCamera: THREE.PerspectiveCamera;
+        if (shotSequence.length > 0) {
+          renderCamera = cineCameraRef;
+        } else {
+          const cameraObj = resolveRenderCamera(currentObjects, activeCameraId);
+          const manualCam = cameraObj ? (rootsRef.current.get(cameraObj.id) as THREE.PerspectiveCamera | undefined) : undefined;
+          renderCamera = (manualCam ?? c) as THREE.PerspectiveCamera;
+        }
 
-        return exportMotionVideo(scene, (cineCam ?? c) as THREE.PerspectiveCamera, controls, onProgress).finally(() => {
+        return exportMotionVideo(scene, renderCamera, controls, onProgress).finally(() => {
           exportingRef.current = false;
         });
       },
@@ -607,6 +633,7 @@ function Workspace({ grid, axes, ready, mode }: { grid: boolean; axes: boolean; 
       },
       getScene: () => scene,
       getCamera: () => camera,
+      getCineCamera: () => cineCameraRef,
     });
   }, [camera, controls, gl, scene]);
 
@@ -640,11 +667,14 @@ function Workspace({ grid, axes, ready, mode }: { grid: boolean; axes: boolean; 
         </mesh>
       )}
 
+      {mode === 'motion' && <PlaybackDriver />}
+
       {objects.map((obj) => (
         <AnimatedObject
           key={obj.id}
           object={obj}
           selected={obj.id === selectedId}
+          isActiveCamera={obj.id === activeCameraId}
           registerInstance={registerObjectInstance}
           unregisterInstance={unregisterObjectInstance}
           onDefaultPosture={updateObjectDefaultPosture}
@@ -696,7 +726,7 @@ function Workspace({ grid, axes, ready, mode }: { grid: boolean; axes: boolean; 
         onDragStart={beginHistoryGroup}
         onDragEnd={endHistoryGroup}
       />
-      {mode === 'motion' && <PlaybackDriver />}
+      {mode === 'motion' && <CinematicSequenceCamera camera={cineCameraRef} />}
 
       <OrbitControls
         ref={(el: OrbitControlsType | null) => { if (el && el !== controls) setControls(el); }}
@@ -726,6 +756,7 @@ function Workspace({ grid, axes, ready, mode }: { grid: boolean; axes: boolean; 
 interface AnimatedObjectProps {
   object: SceneObject;
   selected: boolean;
+  isActiveCamera?: boolean;
   registerInstance: (id: string, obj: THREE.Object3D) => void;
   unregisterInstance: (id: string) => void;
   onDefaultPosture: (id: string, posture: Posture) => void;
@@ -747,7 +778,7 @@ interface AnimatedObjectProps {
  * `.posture`/`.fov` instead of the track — the same rendering path covers
  * both Static and Motion mode with no mode branch here.
  */
-function AnimatedObject({ object, selected, registerInstance, unregisterInstance, onDefaultPosture, onSelect, onReady }: AnimatedObjectProps) {
+function AnimatedObject({ object, selected, isActiveCamera, registerInstance, unregisterInstance, onDefaultPosture, onSelect, onReady }: AnimatedObjectProps) {
   const rootRef = useRef<THREE.Object3D | null>(null);
 
   useFrame(() => {
@@ -773,6 +804,28 @@ function AnimatedObject({ object, selected, registerInstance, unregisterInstance
       if (cam.fov !== sample.fov) {
         cam.fov = sample.fov;
         cam.updateProjectionMatrix();
+      }
+    }
+
+    // Procedural camera rigs: recalculate this camera's position/orientation
+    // fresh every frame from its target's current animated state, instead of
+    // requiring a keyframe on the camera itself for every frame. A rig
+    // overrides whatever `sample` above already wrote — it never touches the
+    // target's own track.
+    if (object.type === "camera" && object.cameraRig) {
+      const rig = object.cameraRig;
+      const state = useComposerStore.getState();
+      const cam = root as THREE.PerspectiveCamera;
+      // Lookups resolve on demand rather than the caller pre-resolving a
+      // single target/root before calling in.
+      const lookups: RigLookups = {
+        getObject: (id) => state.objects.find((o) => o.id === id),
+        getRoot: (id) => state.objectInstances.get(id),
+      };
+      const result = evaluateCameraRig(rig, elapsed, { fovDeg: cam.fov, aspect: cam.aspect }, lookups);
+      if (result) {
+        root.position.copy(result.position);
+        root.lookAt(result.lookAt);
       }
     }
   });
@@ -824,6 +877,7 @@ function AnimatedObject({ object, selected, registerInstance, unregisterInstance
         fov={object.fov}
         visible={object.visible}
         selected={selected}
+        isActive={isActiveCamera}
         registerInstance={registerInstance}
         unregisterInstance={unregisterInstance}
         onReady={handleReady}
@@ -850,6 +904,33 @@ function AnimatedObject({ object, selected, registerInstance, unregisterInstance
       onSelect={onSelect}
     />
   );
+}
+
+/**
+ * Bare useFrame, no visuals: re-solves the store's top-level shotSequence
+ * every frame onto the one dedicated cinematic camera, exactly the way a
+ * "shot" CameraRig re-solves onto a scene camera object — just never
+ * attached to a SceneObject, so there is nothing here for a manual
+ * orbit/pose/character edit to collide with. Only used for playback/export;
+ * the live drafting preview (both main viewport and Shot Preview pane) goes
+ * through the main camera's own `applyShot` instead (see ComposerShell).
+ */
+function CinematicSequenceCamera({ camera }: { camera: THREE.PerspectiveCamera }) {
+  useFrame(() => {
+    const state = useComposerStore.getState();
+    if (state.shotSequence.length === 0) return;
+    const lookups: RigLookups = {
+      getObject: (id) => state.objects.find((o) => o.id === id),
+      getRoot: (id) => state.objectInstances.get(id),
+    };
+    const cameraInfo = { fovDeg: camera.fov, aspect: camera.aspect };
+    const result = evaluateShotSequence(state.shotSequence, state.playback.elapsed, cameraInfo, lookups);
+    if (result) {
+      camera.position.copy(result.position);
+      camera.lookAt(result.lookAt);
+    }
+  });
+  return null;
 }
 
 /** Bare useFrame, no visuals: advances playback.elapsed while playing. */

@@ -41,6 +41,9 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .capture-shot-btn{position:absolute;top:16px;right:16px;padding:10px 18px;border-radius:var(--radius-md);font-size:12px;font-weight:600;color:#fff;background:var(--accent-blue);border:none;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.3);z-index:10;white-space:nowrap;transition:background .15s}
 .capture-shot-btn:hover{background:#1d4ed8}
 .capture-shot-btn:disabled{opacity:.65;cursor:not-allowed}
+/* Export is the one primary action in Motion mode — accent lime instead of the capture button's blue so it reads as "the" action, not just another editing control. */
+.capture-shot-btn.export-btn{background:var(--accent);color:#15191d}
+.capture-shot-btn.export-btn:hover:not(:disabled){background:#c2eb3d}
 .composition-controls{position:absolute;bottom:80px;right:16px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px;background:rgba(21,24,28,.92);border:1px solid var(--border);border-radius:var(--radius-md);backdrop-filter:blur(10px);z-index:10}
 .composition-row{display:flex;gap:4px}
 .composition-btn{width:36px;height:36px;border-radius:6px;font-size:16px;font-weight:600;color:#c4cbcc;background:#20252a;border:1px solid var(--border);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s,border-color .15s}
@@ -430,6 +433,8 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .composer-add-shot-btn{padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel-strong);color:#c4cbcc;font-size:11px;transition:background .15s,color .15s,border-color .15s}
 .composer-add-shot-btn:hover:not(:disabled){background:var(--accent-blue);color:#fff;border-color:var(--accent-blue)}
 .composer-add-shot-btn:disabled{opacity:.4;cursor:not-allowed}
+.composer-add-shot-btn.primary{background:var(--accent-blue);color:#fff;border-color:var(--accent-blue)}
+.composer-add-shot-btn.primary:hover:not(:disabled){background:#1d4ed8}
 
 /* Static/Motion segmented control — top nav */
 .mode-toggle{display:flex;align-items:center;gap:2px;padding:3px;background:var(--panel);border:1px solid var(--border);border-radius:999px}
@@ -451,6 +456,58 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .shotbuilder-opt{display:flex;flex-direction:column;align-items:center;gap:5px;width:58px;padding:8px 4px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel-strong);color:#8a9599;font-size:9px;text-align:center;transition:border-color .15s,color .15s}
 .shotbuilder-opt:hover{border-color:#3c464b;color:#c4cbcc}
 .shotbuilder-opt.active{border-color:var(--accent);color:var(--accent);background:rgba(214,255,83,.08)}
+.shotbuilder-editing-actions{display:flex;gap:8px;margin:16px 0}
+.shotbuilder-editing-actions .composer-add-shot-btn{flex:1}
+.shotbuilder-current{font-size:11px;color:var(--text-dim);margin-bottom:20px}
+
+/* Motion timeline & playback — one collapsible panel: compact transport bar
+   always visible, the cinematic Shot Sequence + secondary object keyframes
+   only while expanded, so the viewport keeps most of the screen by default. */
+.motion-timeline-panel{background:var(--panel);border-top:1px solid var(--border)}
+.motion-timeline-header{display:flex;align-items:center;gap:16px;padding:8px 24px}
+.motion-timeline-panel.collapsed .motion-timeline-header{padding:6px 24px}
+.timeline-collapse-btn{width:24px;height:24px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--text-dim);background:var(--panel-strong);border:1px solid var(--border);border-radius:var(--radius-sm)}
+.timeline-collapse-btn:hover{color:var(--accent);border-color:#3c464b}
+.motion-timeline-summary{flex:0 0 auto;font-size:11px;color:var(--text-dim);white-space:nowrap}
+.motion-timeline-body{padding:0 24px 16px}
+.motion-timeline-settings{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-dim);margin-top:10px}
+.motion-timeline-settings input{width:52px;padding:4px 6px;font:inherit;font-size:12px;color:#d8dedd;background:#0f1215;border:1px solid var(--border);border-radius:var(--radius-sm)}
+.motion-object-keyframes{margin-top:12px;border-top:1px solid var(--border);padding-top:8px}
+.motion-object-keyframes summary{font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:var(--text-dim);cursor:pointer;padding:4px 0}
+.motion-object-keyframes summary:hover{color:var(--accent)}
+.motion-object-keyframes > div{padding:0!important;background:none!important;border:none!important}
+
+.transport-bar{display:flex;align-items:center;gap:12px;flex:1;min-width:0}
+.transport-bar-buttons{display:flex;gap:4px;flex:0 0 auto}
+.transport-bar-buttons button{width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:12px;background:var(--panel-strong);border:1px solid var(--border);border-radius:var(--radius-sm);color:#c4cbcc}
+.transport-bar-buttons button:hover:not(:disabled){color:var(--accent);border-color:#3c464b}
+.transport-bar-buttons button:disabled{opacity:.4;cursor:not-allowed}
+.transport-bar-time{flex:0 0 auto;font-size:11px;color:var(--text-dim);white-space:nowrap}
+.transport-bar-scrub{flex:1;min-width:80px}
+
+/* Shot Sequence — the main cinematic timeline: a ruler + proportionally-sized
+   cards, the familiar video-editor mental model. Per-segment edit controls
+   (duration/reorder/remove) only render on the selected card, so the default
+   view stays a clean row of labeled blocks rather than a wall of inputs. */
+.shotseq-empty{font-size:12px;color:var(--text-dim);padding:12px 0}
+.shotseq-ruler{position:relative;height:16px;font-size:9px;color:var(--text-faint)}
+.shotseq-tick{position:absolute;transform:translateX(-50%)}
+.shotseq-track{position:relative;height:64px;background:#0d0f13;border-radius:var(--radius-sm)}
+/* ponytail: cards below have a 56px min-width floor so short segments stay legible; a very long, many-segment sequence can then overlap cards instead of scrolling. Add horizontal zoom/scroll if that comes up in practice. */
+.shotseq-playhead{position:absolute;top:0;bottom:0;width:2px;background:var(--accent);z-index:2;pointer-events:none}
+.shotseq-card{position:absolute;top:0;bottom:0;min-width:56px;overflow:hidden;display:flex;flex-direction:column;justify-content:center;gap:2px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel-strong);cursor:pointer;transition:border-color .15s}
+.shotseq-card + .shotseq-card{margin-left:2px}
+.shotseq-card:hover{border-color:#3c464b}
+.shotseq-card.active{border-color:var(--accent-blue)}
+.shotseq-card.selected{border-color:var(--accent);background:rgba(214,255,83,.08)}
+.shotseq-card-name{font-size:11px;color:var(--text);white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
+.shotseq-card-meta{font-size:9px;color:var(--text-dim);white-space:nowrap;text-overflow:ellipsis;overflow:hidden;text-transform:uppercase}
+.shotseq-card-controls{display:flex;align-items:center;gap:4px;margin-top:4px}
+.shotseq-card-controls label{display:flex;align-items:center;gap:3px;font-size:10px;color:var(--text-dim)}
+.shotseq-card-controls input{width:36px;padding:2px 4px;font:inherit;font-size:10px;color:#d8dedd;background:#0f1215;border:1px solid var(--border);border-radius:4px}
+.shotseq-card-controls button{width:18px;height:18px;font-size:9px;background:var(--panel);border:1px solid var(--border);border-radius:4px}
+.shotseq-card-controls button:hover:not(:disabled){color:var(--accent)}
+.shotseq-card-controls button:disabled{opacity:.4;cursor:not-allowed}
 
 .workspace-toolbar button.primary{background:var(--accent-blue);color:#fff}
 .workspace-toolbar button.primary:hover:not(:disabled){background:#1d4ed8;color:#fff}

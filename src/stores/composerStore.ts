@@ -10,6 +10,8 @@ import {
 import { groundFigure } from "../modules/composer/helpers/mannequinFactory";
 import { sampleTrack } from "../modules/motion/helpers/sampleTrack";
 import { yawPitchTowards, eulerFromYawPitch } from "../modules/motion/helpers/cameraFree";
+import type { ShotParams } from "../modules/library/calibration/shotSolver";
+import { sequenceDuration } from "../modules/motion/helpers/shotSequence";
 
 export type ComposerTool = "select" | "move" | "rotate" | "scale" | "pose";
 
@@ -35,6 +37,56 @@ export interface SceneTransform {
   rotation: [number, number, number];
   scale: [number, number, number];
 }
+
+/**
+ * A procedural camera behavior, evaluated fresh every frame from the current
+ * (independently animated) state of its target(s) — the camera's own
+ * keyframe track is untouched by any of these; position/rotation from a rig
+ * simply wins for that frame. Only meaningful on `type: "camera"` objects.
+ * All four are quaternion/vector math (Object3D.lookAt, circular parametric
+ * motion) — none of them ever write an Euler rotation keyframe.
+ */
+export type CameraRig =
+  | { type: "follow"; targetId: string; offset: [number, number, number] }
+  | {
+      type: "orbit";
+      targetId: string;
+      radius: number;
+      height: number;
+      startAngleDeg: number;
+      endAngleDeg: number;
+      duration: number;
+      /** Global timeline time the sweep begins; holds at startAngleDeg before it and endAngleDeg after. */
+      startTime: number;
+    }
+  | {
+      type: "shot";
+      targetId: string;
+      /** The "other" character an "ots" angle looks past the target toward — ignored by every other angle. */
+      secondaryTargetId?: string | null;
+      shotParams: ShotParams;
+    };
+
+/**
+ * One shot in the store's top-level `shotSequence` — a `shot`-style re-solved
+ * framing, held for `duration` seconds. Deliberately plain data with no
+ * camera/SceneObject attached: the sequence is evaluated every frame straight
+ * off this array by one dedicated runtime cinematic camera (see
+ * ComposerViewport's CinematicSequenceCamera), never a scene camera object,
+ * so selecting/editing shots can never leave a persistent camera behind. A
+ * segment's start time is deliberately not stored — it's always the
+ * cumulative duration of the segments before it, so reordering/resizing can
+ * never desync a start time from its neighbors.
+ */
+export interface ShotSegment {
+  id: string;
+  targetId: string;
+  secondaryTargetId?: string | null;
+  shotParams: ShotParams;
+  duration: number;
+}
+
+export const DEFAULT_SHOT_SEGMENT_DURATION = 3;
 
 export interface Keyframe {
   id: string;
@@ -75,6 +127,14 @@ export interface SceneObject {
   liveEditTime: number | null;
   /** Live-staged FOV, mirrors `transform`/`posture`'s live-edit staging. Only meaningful for `type: "camera"`. */
   fov?: number;
+  /**
+   * A procedural behavior that continuously recalculates this camera's
+   * position/orientation from its target's current animated state, instead of
+   * requiring a keyframe at every frame. Null/absent means free orientation
+   * from its own keyframe track, same as before this existed. Only meaningful
+   * for `type: "camera"`.
+   */
+  cameraRig?: CameraRig | null;
 }
 
 export interface PlaybackState {
@@ -92,6 +152,14 @@ export interface ComposerState {
   /** Selected keyframe on the selected object's track, for the timeline UI. Null when editing the object's live transform instead. */
   selectedKeyframeId: string | null;
 
+  /**
+   * Which camera object is the "viewing" camera — drives video export and the
+   * active-camera badge. Independent of `selectedObjectId`: selecting a camera
+   * edits its transform/keyframes, setting it active decides what gets rendered.
+   * Null means "no camera object exists yet" or one hasn't been chosen.
+   */
+  activeCameraId: string | null;
+
   activeTool: ComposerTool;
 
   /** Mannequin joint key currently being edited, e.g. "l_elbow". Null when none. */
@@ -101,6 +169,15 @@ export interface ComposerState {
   partScaleMode: boolean;
 
   playback: PlaybackState;
+
+  /**
+   * The cinematic cut list: a run of shot combinations played back to back on
+   * the shared timeline. Deliberately store-level, not attached to any camera
+   * object — a dedicated runtime camera (never a SceneObject) re-solves the
+   * active segment every frame, so building/editing a sequence never creates,
+   * reuses, or otherwise touches a scene camera.
+   */
+  shotSequence: ShotSegment[];
 
   /**
    * Live mannequin-js figures / primitive roots by object id. For mannequins this
@@ -124,6 +201,24 @@ export interface ComposerState {
   selectObject: (id: string) => void;
 
   clearSelection: () => void;
+
+  /** Sets which camera object is the active/viewing camera. No-op if `id` isn't a camera. */
+  setActiveCamera: (id: string | null) => void;
+
+  /** Sets/clears a camera's procedural rig. No-op if `id` isn't a camera, or a referenced target/secondaryTarget doesn't exist. */
+  setCameraRig: (id: string, rig: CameraRig | null) => void;
+
+  /** Appends a new segment to the shot sequence. */
+  addShotSegment: (segment: Omit<ShotSegment, "id" | "duration"> & { duration?: number }) => void;
+
+  /** Removes a segment from the shot sequence. */
+  removeShotSegment: (segmentId: string) => void;
+
+  /** Patches a segment's fields (duration, targetId, shotParams, ...) in place. */
+  updateShotSegment: (segmentId: string, patch: Partial<Omit<ShotSegment, "id">>) => void;
+
+  /** Reorders the shot sequence to match `segmentIds`. No-op unless it's a permutation of the existing segment ids. */
+  reorderShotSegments: (segmentIds: string[]) => void;
 
   renameObject: (id: string, name: string) => void;
 
@@ -271,6 +366,20 @@ function canPoseSelection(objects: SceneObject[], id: string | null): boolean {
 export const selectCanPose = (s: ComposerState) =>
   canPoseSelection(s.objects, s.selectedObjectId);
 
+/**
+ * Shot Combination framing is generic bounding-box math (see shotSolver's
+ * getCharacterAnchors) — it works for mannequins and primitives alike. Only a
+ * camera object has no meaningful "frame this" behavior.
+ */
+function canComposeShotSelection(objects: SceneObject[], id: string | null): boolean {
+  const target = objects.find((o) => o.id === id);
+  return !!target && target.type !== "camera";
+}
+
+/** True when the current selection supports Shot Combination framing. For UI enablement. */
+export const selectCanComposeShot = (s: ComposerState) =>
+  canComposeShotSelection(s.objects, s.selectedObjectId);
+
 function findNearKeyframeIndex(keyframes: Keyframe[], time: number): number {
   return keyframes.findIndex((k) => Math.abs(k.time - time) <= KEYFRAME_EPSILON);
 }
@@ -313,8 +422,13 @@ function upsertKeyframe(
   return [...keyframes, seeded].sort((a, b) => a.time - b.time);
 }
 
-/** The transform/posture/fov a live edit should build on top of: the still-valid staged edit, or the sampled track. */
-function stageBase(o: SceneObject, elapsed: number): { transform: SceneTransform; posture?: Posture; fov?: number } {
+/**
+ * The transform/posture/fov a live edit should build on top of: the still-valid
+ * staged edit, or the sampled track. Exported so the viewport's camera-tracking
+ * render loop can independently sample a track target's current position at
+ * the same shared `elapsed`, without duplicating this same effective-live logic.
+ */
+export function stageBase(o: SceneObject, elapsed: number): { transform: SceneTransform; posture?: Posture; fov?: number } {
   const isLive = o.liveEditTime !== null && Math.abs(o.liveEditTime - elapsed) < 1e-6;
   // A track-less object (a fresh camera before its first "+ Keyframe", or any
   // Static object before it has ever moved off elapsed 0) has nothing to
@@ -323,6 +437,40 @@ function stageBase(o: SceneObject, elapsed: number): { transform: SceneTransform
     return { transform: o.transform, posture: o.posture, fov: o.fov };
   }
   return sampleTrack(o.keyframes, elapsed);
+}
+
+/**
+ * Drops a camera's rig entirely if its primary target was deleted (it can no
+ * longer solve anything), or just clears the OTS secondary if only that one
+ * was deleted — mirroring how OTS already degrades gracefully to a solo shot
+ * when there's no second character.
+ */
+function scrubCameraRig(rig: CameraRig, deletedId: string): CameraRig | null {
+  if (rig.targetId === deletedId) return null;
+  if (rig.type === "shot" && rig.secondaryTargetId === deletedId) return { ...rig, secondaryTargetId: null };
+  return rig;
+}
+
+/** Mirrors scrubCameraRig for the store-level shot sequence: drops any segment whose primary target was deleted, else just clears a matching OTS secondary. */
+function scrubShotSequence(segments: ShotSegment[], deletedId: string): ShotSegment[] {
+  return segments
+    .filter((s) => s.targetId !== deletedId)
+    .map((s) => (s.secondaryTargetId === deletedId ? { ...s, secondaryTargetId: null } : s));
+}
+
+/**
+ * The one authoritative answer to "which manually-managed camera renders this
+ * scene" — used by the viewport's video export/preview only when there's no
+ * shot sequence to render instead (see the dedicated runtime cinematic camera
+ * in ComposerViewport). Priority: the flagged active camera if it's still a
+ * real camera, else the first camera in the scene, else null when there's no
+ * camera at all.
+ */
+export function resolveRenderCamera(objects: SceneObject[], activeCameraId: string | null): SceneObject | null {
+  const cameras = objects.filter((o) => o.type === "camera");
+  if (cameras.length === 0) return null;
+  const active = activeCameraId ? cameras.find((o) => o.id === activeCameraId) : undefined;
+  return active ?? cameras[0];
 }
 
 function objectName(type: ObjectType, index: number): string {
@@ -356,6 +504,7 @@ export const useComposerStore =
 
       selectedObjectId: initialSelectedId,
       selectedKeyframeId: null,
+      activeCameraId: null,
 
       activeTool: "move",
 
@@ -364,6 +513,8 @@ export const useComposerStore =
       partScaleMode: false,
 
       playback: { playing: false, elapsed: 0, speed: 1, duration: 6 },
+
+      shotSequence: [],
 
       objectInstances: new Map<string, THREE.Object3D>(),
 
@@ -405,6 +556,10 @@ export const useComposerStore =
           activeTool: "move",
           selectedJointKey: null,
           partScaleMode: false,
+          // The first camera in a scene becomes the viewing camera automatically —
+          // otherwise export/preview would have no camera to render through until
+          // the user thinks to set one explicitly.
+          activeCameraId: type === "camera" && get().activeCameraId === null ? object.id : get().activeCameraId,
         });
       },
 
@@ -478,8 +633,10 @@ export const useComposerStore =
       },
 
       deleteObject: (id) => {
-        const { objects, selectedObjectId, activeTool, selectedKeyframeId } = get();
-        const remaining = objects.filter((o) => o.id !== id);
+        const { objects, selectedObjectId, activeTool, selectedKeyframeId, shotSequence } = get();
+        const remaining = objects
+          .filter((o) => o.id !== id)
+          .map((o) => (o.cameraRig ? { ...o, cameraRig: scrubCameraRig(o.cameraRig, id) } : o));
         const nextSelected =
           selectedObjectId === id
             ? remaining.length > 0
@@ -499,6 +656,8 @@ export const useComposerStore =
           activeTool: poseStillValid ? activeTool : "move",
           selectedJointKey: poseStillValid ? get().selectedJointKey : null,
           partScaleMode: poseStillValid ? get().partScaleMode : false,
+          activeCameraId: get().activeCameraId === id ? null : get().activeCameraId,
+          shotSequence: scrubShotSequence(shotSequence, id),
         });
       },
 
@@ -510,6 +669,8 @@ export const useComposerStore =
           selectedJointKey: null,
           partScaleMode: false,
           activeTool: "move",
+          activeCameraId: null,
+          shotSequence: [],
           playback: { ...get().playback, playing: false, elapsed: 0 },
         });
       },
@@ -537,6 +698,51 @@ export const useComposerStore =
 
       clearSelection: () => {
         set({ selectedObjectId: null, selectedJointKey: null, selectedKeyframeId: null });
+      },
+
+      setActiveCamera: (id) => {
+        if (id !== null && !get().objects.some((o) => o.id === id && o.type === "camera")) return;
+        set({ activeCameraId: id });
+      },
+
+      setCameraRig: (id, rig) => {
+        const { objects } = get();
+        const camera = objects.find((o) => o.id === id);
+        if (!camera || camera.type !== "camera") return;
+        if (rig) {
+          if (rig.targetId === id || !objects.some((o) => o.id === rig.targetId)) return;
+          if (rig.type === "shot" && rig.secondaryTargetId && !objects.some((o) => o.id === rig.secondaryTargetId)) return;
+        }
+        set({ objects: objects.map((o) => (o.id === id ? { ...o, cameraRig: rig } : o)) });
+      },
+
+      addShotSegment: (segment) => {
+        const newSegment: ShotSegment = { id: crypto.randomUUID(), duration: DEFAULT_SHOT_SEGMENT_DURATION, ...segment };
+        const segments = [...get().shotSequence, newSegment];
+        set({ shotSequence: segments });
+        // A sequence is only ever the complete cut if the timeline is at
+        // least as long as it — never shrinks a duration the user already
+        // extended for other objects, only grows to cover what was just added.
+        const total = sequenceDuration(segments);
+        if (total > get().playback.duration) get().setDuration(total);
+      },
+
+      removeShotSegment: (segmentId) => {
+        set({ shotSequence: get().shotSequence.filter((s) => s.id !== segmentId) });
+      },
+
+      updateShotSegment: (segmentId, patch) => {
+        const segments = get().shotSequence.map((s) => (s.id === segmentId ? { ...s, ...patch } : s));
+        set({ shotSequence: segments });
+        const total = sequenceDuration(segments);
+        if (total > get().playback.duration) get().setDuration(total);
+      },
+
+      reorderShotSegments: (segmentIds) => {
+        const bySegId = new Map(get().shotSequence.map((s) => [s.id, s]));
+        const reordered = segmentIds.map((id) => bySegId.get(id)).filter((s): s is ShotSegment => !!s);
+        if (reordered.length !== get().shotSequence.length) return;
+        set({ shotSequence: reordered });
       },
 
       renameObject: (id, name) => {
@@ -640,11 +846,17 @@ export const useComposerStore =
 
       addKeyframe: (objectId, time) => {
         set((state) => ({
-          objects: state.objects.map((o) =>
-            o.id === objectId
-              ? { ...o, keyframes: upsertKeyframe(o.keyframes, time, {}, { transform: o.transform, posture: o.posture, fov: o.fov }) }
-              : o,
-          ),
+          objects: state.objects.map((o) => {
+            if (o.id !== objectId) return o;
+            // `time` (from a timeline double-click) is only where the keyframe lands.
+            // What it captures is whatever is actually staged right now, at the
+            // playhead (state.playback.elapsed) — a double-click's pixel-derived
+            // `time` essentially never matches liveEditTime/elapsed exactly, so
+            // checking liveness against `time` instead of the real elapsed would
+            // almost always miss a just-made live edit and fall back to the stale track.
+            const current = stageBase(o, state.playback.elapsed);
+            return { ...o, keyframes: upsertKeyframe(o.keyframes, time, current, current) };
+          }),
         }));
       },
 

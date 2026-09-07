@@ -27,7 +27,7 @@ const TRANSFORM = z.object({
 export const TOOLS = [
   {
     name: 'get_scene',
-    description: 'Get every object in the current scene (id, name, type, transform, visibility, lock, posture presence, keyframes, fov) plus selection/playback state. Call this first to see what exists before changing anything.',
+    description: 'Get every object in the current scene (id, name, type, transform, visibility, lock, posture presence, keyframes, fov, cameraRig) plus selection/playback state and which camera (if any) is the active/viewing camera. Call this first to see what exists before changing anything. Each object carries its own independent keyframe track on the same shared timeline, so a character and a camera (or several cameras) can be keyframed and played back concurrently without affecting each other; a camera\'s cameraRig (see set_camera_rig) additionally overrides its position/orientation each frame to procedurally track/follow/orbit a target or maintain a shot preset.',
     inputSchema: {},
   },
   {
@@ -57,7 +57,7 @@ export const TOOLS = [
   },
   {
     name: 'select_object',
-    description: 'Select an object by id. Required before set_shot in Static mode (the shot solves relative to the selected character), and before Pose/keyframe tools that act on "the selection" implicitly.',
+    description: 'Select an object by id. Required before set_shot in Static mode (the shot solves relative to the selected object — any type except camera), and before Pose/keyframe tools that act on "the selection" implicitly.',
     inputSchema: { id: z.string() },
   },
   {
@@ -127,7 +127,7 @@ export const TOOLS = [
   },
   {
     name: 'set_shot',
-    description: 'Configure shot size, camera angle, elevation, and/or composition and apply it to the viewport camera. Requires a character to already be selected (select_object) in Static mode. For angle "ots" (over-the-shoulder), a second character must already be in the scene — it becomes the OTS target automatically. Any field omitted keeps its current value.',
+    description: 'Configure shot size, camera angle, elevation, and/or composition and apply it to the viewport camera. Requires an object (any type except camera — mannequin or primitive) to already be selected (select_object) in Static mode. For angle "ots" (over-the-shoulder), a second character must already be in the scene — it becomes the OTS target automatically. Any field omitted keeps its current value.',
     inputSchema: { shotSize: SHOT_SIZE.optional(), angle: CAMERA_ANGLE.optional(), elevation: ELEVATION.optional(), composition: COMPOSITION.optional() },
   },
   {
@@ -144,6 +144,89 @@ export const TOOLS = [
     name: 'set_camera_fov',
     description: 'Set a camera object\'s field of view (10-120 degrees).',
     inputSchema: { id: z.string(), fov: z.number().min(1).max(179) },
+  },
+  {
+    name: 'set_active_camera',
+    description: 'Choose which camera object is the active/viewing camera — the one video export and the camera preview render through. A scene can hold several camera objects, each with its own independent keyframe track; this only changes which one is "live", it never touches any camera\'s keyframes.',
+    inputSchema: { id: z.string() },
+  },
+  {
+    name: 'set_camera_rig',
+    description:
+      'Set or clear a procedural camera rig — how to express cinematic intent ("orbit 360 degrees around them", "follow the runner") without generating a position/rotation keyframe for every frame. The camera\'s own keyframe track is untouched either way; a rig recalculates its transform fresh every frame from the target\'s current (independently animated) state, using stable vector/lookAt math (no hand-authored Euler rotation keyframes). Rig types: ' +
+      '"follow" — hold a fixed world-space offset from targetId, always facing it. ' +
+      '"orbit" — circle targetId at radius/height, sweeping startAngleDeg to endAngleDeg over duration seconds starting at startTime (default 0) on the shared timeline; holds at the end angle afterward — the core 360-orbit test case. ' +
+      '"shot" — continuously re-solve one of the existing shot presets (same shotSize/angle/elevation/composition as set_shot/list_shot_presets) against targetId\'s live bounding box every frame, maintaining the framing while the target moves; secondaryTargetId is the "other" character an "ots" angle looks past the target toward. ' +
+      '"none" — clear any rig and go back to free rotation from the camera\'s own track.',
+    inputSchema: {
+      id: z.string(),
+      rig: z.discriminatedUnion('type', [
+        z.object({ type: z.literal('none') }),
+        z.object({ type: z.literal('follow'), targetId: z.string(), offset: VEC3 }),
+        z.object({
+          type: z.literal('orbit'),
+          targetId: z.string(),
+          radius: z.number().positive(),
+          height: z.number(),
+          startAngleDeg: z.number(),
+          endAngleDeg: z.number(),
+          duration: z.number().positive(),
+          startTime: z.number().min(0).optional(),
+        }),
+        z.object({
+          type: z.literal('shot'),
+          targetId: z.string(),
+          secondaryTargetId: z.string().optional(),
+          shotSize: SHOT_SIZE,
+          angle: CAMERA_ANGLE,
+          elevation: ELEVATION,
+          composition: COMPOSITION,
+        }),
+      ]),
+    },
+  },
+  {
+    name: 'add_shot_segment',
+    description:
+      'Append one shot to the Motion Shot Sequence — a run of re-solved shot presets (same shotSize/angle/elevation/composition as set_shot/list_shot_presets), each held for `duration` seconds (default 3) and re-solved live against its target\'s current bounding box every frame, so a wide->OTS->medium->close-up sequence keeps each framing correct even while targets move. This is store-level cut-list data, not a camera object — it drives one dedicated cinematic camera used only for Motion preview/export, and never touches the viewport camera or any camera object in the scene. `secondaryTargetId` is the "other" character an "ots" angle looks past `targetId` toward. Chain multiple calls to build a whole sequence — each segment starts right after the previous one ends.',
+    inputSchema: {
+      targetId: z.string(),
+      secondaryTargetId: z.string().optional(),
+      shotSize: SHOT_SIZE,
+      angle: CAMERA_ANGLE,
+      elevation: ELEVATION,
+      composition: COMPOSITION,
+      duration: z.number().positive().optional(),
+    },
+  },
+  {
+    name: 'get_shot_sequence',
+    description: 'Read the Motion Shot Sequence — every segment\'s target, framing, duration, and derived start time (never stored, always the sum of every prior segment\'s duration), plus the sequence\'s total duration.',
+    inputSchema: {},
+  },
+  {
+    name: 'update_shot_segment',
+    description: 'Patch one segment of the Motion Shot Sequence (target, secondary target, framing, and/or duration) — any field omitted keeps its current value.',
+    inputSchema: {
+      segmentId: z.string(),
+      targetId: z.string().optional(),
+      secondaryTargetId: z.string().optional(),
+      shotSize: SHOT_SIZE.optional(),
+      angle: CAMERA_ANGLE.optional(),
+      elevation: ELEVATION.optional(),
+      composition: COMPOSITION.optional(),
+      duration: z.number().positive().optional(),
+    },
+  },
+  {
+    name: 'remove_shot_segment',
+    description: 'Remove one segment from the Motion Shot Sequence.',
+    inputSchema: { segmentId: z.string() },
+  },
+  {
+    name: 'export_video',
+    description: 'Render the Motion timeline through to a downloaded video file, the same recording the in-app Export Video button triggers. Plays the full timeline duration in real time before the download completes. If a Shot Sequence exists, exports through its dedicated cinematic camera; otherwise requires a camera set active (set_active_camera).',
+    inputSchema: {},
   },
   {
     name: 'add_keyframe',

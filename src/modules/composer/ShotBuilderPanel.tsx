@@ -22,25 +22,33 @@ export function ShotBuilderPanel({
   scene,
   camera,
   canCompose,
+  onAddToTimeline,
+  editingSegmentLabel,
+  onUpdateSegment,
+  onCancelEdit,
 }: {
   params: ShotParams;
   onChange: (next: ShotParams) => void;
   scene: THREE.Scene | null;
   camera: THREE.Camera | null;
   canCompose: boolean;
+  /** Motion mode only: appends the current shot params (framing the current selection) as a new segment on the sequence camera. Omit to hide the button (e.g. in Static, which has its own shot strip). */
+  onAddToTimeline?: () => void;
+  /** Set once a Shot Sequence card is selected for editing (see ShotSequenceTimeline) — swaps the action button from "add" to "update this segment" and labels which shot is currently loaded. */
+  editingSegmentLabel?: string | null;
+  onUpdateSegment?: () => void;
+  onCancelEdit?: () => void;
 }) {
   if (!canCompose) {
     return (
       <p className="shotbuilder-empty">
-        Select a mannequin in the scene to compose a shot for it.
+        Select an object in the scene to compose a shot for it.
       </p>
     );
   }
 
   return (
     <div className="shotbuilder">
-      <ShotPreview scene={scene} camera={camera} width={SHOT_PREVIEW_WIDTH} height={SHOT_PREVIEW_HEIGHT} />
-
       <ShotBuilderRow label="Shot Size">
         {SHOT_SIZE_OPTIONS.map(([id, label]) => (
           <OptionButton key={id} label={label} active={params.shotSize === id} onClick={() => onChange({ ...params, shotSize: id })}>
@@ -77,6 +85,31 @@ export function ShotBuilderPanel({
           </OptionButton>
         ))}
       </ShotBuilderRow>
+
+      <ShotPreview scene={scene} camera={camera} width={SHOT_PREVIEW_WIDTH} height={SHOT_PREVIEW_HEIGHT} />
+
+      {onAddToTimeline && (
+        editingSegmentLabel ? (
+          <div className="shotbuilder-editing-actions">
+            <button type="button" className="composer-add-shot-btn primary" onClick={onUpdateSegment} title="Save these changes to the selected shot">
+              Update Segment
+            </button>
+            <button type="button" className="composer-add-shot-btn" onClick={onCancelEdit} title="Stop editing this segment">
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button type="button" className="composer-add-shot-btn primary" onClick={onAddToTimeline} title="Append this framing as a new shot on the sequence camera">
+            + Add to Timeline
+          </button>
+        )
+      )}
+
+      {onAddToTimeline && (
+        <div className="shotbuilder-current">
+          {editingSegmentLabel ? `Editing: ${editingSegmentLabel}` : "Drafting a new shot — not yet on the timeline"}
+        </div>
+      )}
     </div>
   );
 }
